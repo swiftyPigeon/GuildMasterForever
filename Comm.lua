@@ -268,7 +268,8 @@ function Comm.SendChunked(payload, urgent, dist)
 	for _, c in ipairs(Codec.Chunk(payload, tostring(msgId))) do Enqueue(dist, c, nil, nil, urgent) end
 end
 function Comm.ChannelReady()
-	return channelIndex > 0
+	if channelIndex > 0 then return true end
+	return Comm.ByGuild ~= nil and Comm.ByGuild() and not Comm.KeyLocked() -- (0.1.2: over GUILD)
 end
 -- Messages waiting to go out, one each SEND_INTERVAL (chat lines apart).
 function Comm.QueueSize()
@@ -329,6 +330,7 @@ local function SendNow(dist, msg, logged, whisperTo)
 	if dist == "CHANNEL" then
 		prefix = Comm.NetPrefix()
 		if not prefix then return false end -- no key: no channel (Comm.KeyLocked)
+		if Comm.ByGuild() then dist, target = "GUILD", nil end -- (0.1.2: see Comm.SingleGuild)
 	end
 	local ok, res = pcall(send, prefix, msg, dist, target)
 	if ok and IsSuccess(res) then
@@ -417,7 +419,8 @@ local function Pump()
 	-- (The regular queue is not stamped with a channel: the census, hellos, decrees, pins and
 	-- Board notes address the network's channel, whichever it is when they leave, and a pin repeats
 	-- itself anyway. Only a player's chat line is written for one channel's audience.)
-	if chatQueue[1] and channelIndex > 0 and not (lastWasChat and queue[1]) then
+	local ready = Comm.ChannelReady() -- (0.1.2: on the channel, or over GUILD)
+	if chatQueue[1] and ready and not (lastWasChat and queue[1]) then
 		lastWasChat = true
 		local item = table.remove(chatQueue, 1)
 		local sent = SendNow("CHANNEL", item.msg, true)
@@ -428,7 +431,7 @@ local function Pump()
 	-- Channel messages wait until we joined; guild messages behind them go out meanwhile.
 	local index
 	for i, item in ipairs(queue) do
-		if item[1] ~= "CHANNEL" or channelIndex > 0 then
+		if item[1] ~= "CHANNEL" or ready then
 			index = i
 			break
 		end
@@ -487,6 +490,25 @@ function Comm.NetPrefix()
 	return netPrefix
 end
 ns.NetPrefix = Comm.NetPrefix
+
+-- 0.1.2 (live WoW: Forever, 2026-11-06): an add-on message on a custom channel is accepted (the
+-- send returns 0) and delivered to nobody, its sender included; over GUILD it is delivered. While
+-- the network is our guild alone, the channel's audience is our guild: what was meant for the
+-- channel goes over GUILD under the network's prefix (Comm.NetPrefix: only guildmates who hold the
+-- key registered it), and is read on arrival as the channel's (OnAddonMessage). The server stamps
+-- the sender and delivers GUILD to our guild only, so every handler's checks still hold.
+function Comm.SingleGuild()
+	if ns.IsNetwork() then return false end
+	if type(ns.ALT_GUILD_NAME) == "string" and ns.ALT_GUILD_NAME ~= "" then return false end
+	local approved = ns.ApprovedGuilds and ns.ApprovedGuilds()
+	if type(approved) == "table" and #approved > 0 then return false end
+	return true
+end
+-- The channel's messages go over GUILD now (the game's own IsInGuild: GUILD needs a real guild).
+local function ByGuild()
+	return IsInGuild() and Comm.SingleGuild()
+end
+Comm.ByGuild = ByGuild
 
 -- The channel's name, from the key, and its password, the key. Each faction has its own name.
 -- Without a key: the old public name, never joined (KeyLocked), only a name to compare against.
@@ -813,9 +835,34 @@ function Comm.GuardStats()
 	}
 end
 
+-- 0.1.2: the game rejoins at login every channel the character sat in. A character who changed
+-- guild, missed a key change while offline, or was removed still sits in a network channel of
+-- before: every "GMF"/"GMFH" + 8 letters channel but `keep` is left. Returns how many.
+local function LeaveStale(keep)
+	if not GetChannelList then return 0 end
+	local list = { GetChannelList() }
+	local stride = type(list[3]) == "boolean" and 3 or 2 -- (id, name, disabled) or (id, name)
+	local n = 0
+	for i = 1, #list, stride do
+		local name = list[i + 1]
+		local hash = type(name) == "string" and name:match("^GMFH?([%l%d]+)$")
+		if hash and #hash == 8 and name ~= keep then
+			LeaveChannelByName(name)
+			ns.Log("channel %s left: a network channel of before", name)
+			n = n + 1
+		end
+	end
+	return n
+end
+Comm.LeaveStale = LeaveStale -- (tests)
+
 function Comm.JoinChannel()
 	Comm.KeyForGuild()
-	if not ns.IsMember() then return end
+	if not ns.IsMember() then
+		LeaveStale(nil)
+		return
+	end
+	LeaveStale(not Comm.KeyLocked() and (Comm.ChannelSpec()) or nil)
 	-- The public channel of the builds before Phase 3: the game rejoins a channel it was in at login,
 	-- so it is left wherever we find ourselves on it. Nothing goes by these names any more.
 	for _, old in ipairs({ ns.CHANNEL, ns.CHANNEL_HORDE }) do
@@ -844,8 +891,9 @@ function Comm.JoinChannel()
 		heardAsk = -math.huge -- (the answers to an ask heard there went there)
 		ns.After(10, "census request", Comm.AskCensus)
 	end
-	if joinedName and joinedName ~= name and GetChannelName(joinedName) > 0 then
-		LeaveChannelByName(joinedName) -- the key changed: leave the old channel
+	if joinedName and joinedName ~= name then
+		-- The key changed: leave the old channel (LeaveStale may have left it already).
+		if GetChannelName(joinedName) > 0 then LeaveChannelByName(joinedName) end
 		channelIndex = 0
 	end
 	if joinedName ~= name then watch = nil end -- another channel: the election guard starts again
@@ -884,7 +932,7 @@ function Comm.NetworkState()
 	if not ns.IsMember() then return nil end
 	if Comm.KeyLocked() then return keyHeldSeen and "held" or "waiting" end
 	local name = Comm.ChannelSpec()
-	if joinedName == name and channelIndex > 0 then return "on" end
+	if ByGuild() or (joinedName == name and channelIndex > 0) then return "on" end -- (0.1.2: over GUILD)
 	return "joining"
 end
 function Comm.DeliveredLogged() return deliveredLogged end
@@ -1276,6 +1324,9 @@ function Comm.MaybeBroadcast(report)
 end
 
 function Comm.Broadcast(report)
+	-- 0.1.2: a network of our guild alone has no one to report to: every guildmate reads our guild
+	-- from their own roster and drops a report of it (Data.Receive). Nothing goes, on any route.
+	if Comm.SingleGuild() then return end
 	-- 1.1: our guild is off the network (net-off, Moderation.lua): its census stays home.
 	local M = ns.Moderation
 	if M and not M.missing and M.OwnGuildOff() then
@@ -1310,7 +1361,7 @@ end
 -- every guild's answer to that ask reaches the whole channel. A left-out ask counts as ours for
 -- the second one: asked ASK_AGAIN later unless a report came.
 function Comm.AskCensus()
-	if not ns.IsMember() then return end
+	if not ns.IsMember() or Comm.SingleGuild() then return end -- (0.1.2: no other guild to answer, Comm.Broadcast)
 	if channelIndex == 0 then
 		askTries = askTries + 1
 		if askTries < 3 then ns.After(20, "census request", Comm.AskCensus) end
@@ -1475,8 +1526,13 @@ function Comm.ResetOutsider() outsiderAsm = Codec.NewAssembler() end -- (tests)
 local function OnAddonMessage(prefix, text, dist, sender, target, zoneChannelID, localID, channelName)
 	-- The channel: our network's prefix only (another network's never reaches a handler). The rest:
 	-- the add-on's own.
+	-- 0.1.2: the network's prefix over GUILD is the channel's message, sent there by a guildmate
+	-- holding the key (Comm.SingleGuild): read as the channel's from here on.
+	local viaGuild = false
 	if dist == "CHANNEL" then
 		if prefix ~= Comm.NetPrefix() then return end
+	elseif dist == "GUILD" and prefix ~= ns.PREFIX and prefix ~= nil and prefix == Comm.NetPrefix() then
+		dist, viaGuild = "CHANNEL", true
 	elseif prefix ~= ns.PREFIX then
 		return
 	end
@@ -1490,7 +1546,7 @@ local function OnAddonMessage(prefix, text, dist, sender, target, zoneChannelID,
 	if text:sub(1, 3) ~= "M1~" then text = Codec.Plain(text) end
 	-- Only our channel counts: an outsider in any other channel we sit in could otherwise
 	-- reach us there, past the sealed channel. Clients that don't give the number pass.
-	if dist == "CHANNEL" then
+	if dist == "CHANNEL" and not viaGuild then
 		if not stats.chanArgs then
 			stats.chanArgs = ("localID=%s name=%s target=%s"):format(tostring(localID), tostring(channelName), tostring(target))
 		end
@@ -1698,6 +1754,7 @@ function Comm.CheckMembership()
 		wipe(queue)
 		DropChat("left")
 	end
+	LeaveStale(nil) -- (0.1.2: and any network channel of before)
 end
 
 ns.On("LOGIN", function()
@@ -1737,10 +1794,13 @@ ns.On("LOGIN", function()
 	end)
 	-- The game joins its own channels (General, Trade...) after ours on a slow login: ours
 	-- moves behind them once the list settles.
-	-- Only in the minutes after we joined: later changes are the player's.
+	-- Only in the minutes after we joined: later changes are the player's. But for /1 (0.1.2): on
+	-- Forever General may come in late, and our channel on /1 sends the player's "/1" to it.
 	local lastPending = false
 	ns.RegisterEvent("CHANNEL_UI_UPDATE", function()
-		if lastPending or ns.Now() - (Comm.joinedAt or 0) > 180 then return end
+		if lastPending then return end
+		local onFirst = joinedName ~= nil and (GetChannelName(joinedName) or 0) == 1
+		if not onFirst and ns.Now() - (Comm.joinedAt or 0) > 180 then return end
 		lastPending = true
 		ns.After(2, "channel last", function()
 			lastPending = false

@@ -260,7 +260,8 @@ local function TreasurerPin(name)
 	name = ns.FullName(ns.Normal(name))
 	local short = ns.ShortName(name):lower()
 	for i, pin in ipairs(ns.TREASURER_CHARACTERS or { ns.TREASURER }) do
-		if short == pin:lower() then return SameGroup(name, ns.TREASURER_REALM) and i or nil end
+		-- (0.1.2: no realm group set, no pinned Treasurer: a namesake on any realm group is someone else.)
+		if short == pin:lower() then return ns.TREASURER_REALM ~= nil and SameGroup(name, ns.TREASURER_REALM) and i or nil end
 	end
 	return nil
 end
@@ -2809,7 +2810,10 @@ function Treasury.DonationsLogout()
 	local name = ns.Comm.ChannelName and ns.Comm.ChannelName()
 	local id = name and GetChannelName and GetChannelName(name) or 0
 	local prefix = ns.NetPrefix and ns.NetPrefix()
-	if prefix and id and id > 0 and C_ChatInfo and C_ChatInfo.SendAddonMessage then
+	-- 0.1.2: a network of our guild alone speaks over GUILD (Comm.SingleGuild).
+	if prefix and ns.Comm.ByGuild and ns.Comm.ByGuild() and C_ChatInfo and C_ChatInfo.SendAddonMessage then
+		pcall(C_ChatInfo.SendAddonMessage, prefix, DonationMessage(false), "GUILD")
+	elseif prefix and id and id > 0 and C_ChatInfo and C_ChatInfo.SendAddonMessage then
 		pcall(C_ChatInfo.SendAddonMessage, prefix, DonationMessage(false), "CHANNEL", id)
 	end
 end

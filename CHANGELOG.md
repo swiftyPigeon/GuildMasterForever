@@ -1,6 +1,28 @@
 # Changelog
 
-## Next release (on GitHub now)
+## 0.1.2
+
+**Fix: the add-on's features between guildmates work again on live WoW: Forever.**
+On live Forever, add-on messages sent on a hidden chat channel are accepted by the game but never
+reach anyone. Guild Master Forever sent almost everything that way, so on live these quietly did
+nothing: the [guild] and [officers] chats (`/gma`, `/gmo`), pinned lines, layers and the layer hop,
+map calls, the board, the leader's tools, polls and the week sheet. (Testing inside one guild looked
+fine because the key, positions, party and loot already went over the guild.)
+
+Now, for a single guild (every guild today), all of it goes over the guild instead, which the game
+delivers. Only guildmates whose add-on holds the guild's key read it, as before.
+
+Also in this release:
+- The census report is no longer sent for a single guild: your guildmates already read your guild
+  from their own roster, so it only used up the guild's message budget.
+- Characters still sitting in an old network channel (after a key change while offline, a guild
+  change, or leaving the guild) now leave it at login.
+- If WoW: Forever's General channel joins late, the add-on's hidden channel no longer keeps /1.
+- A leftover beta realm name was removed from the settings.
+
+Nothing to type: update and log in.
+
+## Since 0.1.1 (on GitHub)
 
 New page: **NETWORKS.md** explains ahead of time how networks of guilds (coming in 0.2.0) will
 work and which kinds of guilds will notice their security. Nothing changes for single guilds.
