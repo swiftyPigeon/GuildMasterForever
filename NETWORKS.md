@@ -84,7 +84,7 @@ The network's channel is locked, not encrypted: anyone who holds the key can rea
 member can always repeat what they read. Removing someone and changing the key keeps that window
 short.
 
-Questions or ideas: [GitHub issues](https://github.com/swiftyPigeon/Guild_Master_Forever/issues).
+Questions or ideas: [GitHub issues](https://github.com/swiftyPigeon/GuildMasterForever/issues).
 
 [yee]: https://nickyee.com/daedalus/archives/print/001635.php
 [duch]: https://arxiv.org/pdf/1112.4915

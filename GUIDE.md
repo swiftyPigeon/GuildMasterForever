@@ -163,7 +163,7 @@ your own add-on saw around you; nothing is sent.
 ### Something's wrong?
 1. `/gmf status` shows what the add-on sees (your guild, the channel, your layer).
 2. `/gmf bug` opens a **bug report** (also **Help** → **Report a bug**). Press **Ctrl+C**, then open a
-   new issue at **https://github.com/swiftyPigeon/Guild_Master_Forever/issues**, paste the report and
+   new issue at **https://github.com/swiftyPigeon/GuildMasterForever/issues**, paste the report and
    add a line on what you were doing. The report never contains your guild's channel key.
 
 | You see | It means |

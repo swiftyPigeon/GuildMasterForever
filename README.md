@@ -28,7 +28,7 @@ is wrong and the game won't load it.
 | `/gmf bug` | copyable error report |
 
 ## Bugs and ideas
-Please open an issue at https://github.com/swiftyPigeon/Guild_Master_Forever/issues.
+Please open an issue at https://github.com/swiftyPigeon/GuildMasterForever/issues.
 For a bug, type `/gmf bug` in game (or open the window's help, then **Report a bug**),
 press Ctrl+C and paste the whole report into the issue, with a line on what you were doing.
 

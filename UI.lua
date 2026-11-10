@@ -2388,7 +2388,7 @@ StaticPopupDialogs["GMF_BUG_CLEAR"] = {
 -- Where the addon lives: its CurseForge page, and its GitHub issues for bug reports and ideas.
 UI.LINKS = {
 	curseforge = "https://www.curseforge.com/wow/addons/guild-master-forever",
-	issues = "https://github.com/swiftyPigeon/Guild_Master_Forever/issues", -- bug reports and ideas
+	issues = "https://github.com/swiftyPigeon/GuildMasterForever/issues", -- bug reports and ideas
 }
 
 -- The help button's page: the version, the tabs in a line each, then the lines /gmf help prints

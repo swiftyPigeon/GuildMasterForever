@@ -5,7 +5,7 @@ If you find a way to get into a guild's hidden channel without being given the k
 messages you shouldn't, pretend to be a guild master or officer, or break the add-on for other
 players, please **don't post it in a public issue**. Report it privately instead:
 
-**[Report a vulnerability](https://github.com/swiftyPigeon/Guild_Master_Forever/security/advisories/new)**
+**[Report a vulnerability](https://github.com/swiftyPigeon/GuildMasterForever/security/advisories/new)**
 (GitHub: the repository's **Security** tab → **Report a vulnerability**). Only the maintainer sees it.
 
 Helpful to include:
@@ -17,7 +17,7 @@ You'll get an answer as soon as possible. Once a fix is released, the report can
 with credit to you if you'd like it.
 
 Ordinary bugs (errors, things that look wrong) go to the public
-[issues](https://github.com/swiftyPigeon/Guild_Master_Forever/issues), with the report from `/gmf bug`.
+[issues](https://github.com/swiftyPigeon/GuildMasterForever/issues), with the report from `/gmf bug`.
 
 ## What the add-on protects, and what it can't
 - **The code is public on purpose.** The protection doesn't depend on hiding how it works: it

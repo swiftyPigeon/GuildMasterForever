@@ -422,7 +422,7 @@ ns.ANSWER_BANK = {
 		{ id = "help-report-bug", topic = "install-update-bugs",
 			q = { "Where do I report a bug?", "How do I send the author an error?" },
 			text = "Guild Master Forever window, help button (left of the X), Report a bug (or /gmf bug). Paste it in a new issue on the add-on's GitHub page.",
-			long = "Open the Guild Master Forever window, click the help button left of the X, then Report a bug (or type /gmf bug). Press Ctrl+C, then paste it in a new issue at github.com/swiftyPigeon/Guild_Master_Forever/issues, with a line on what you were doing. The address is at the top of the report and on the help page." },
+			long = "Open the Guild Master Forever window, click the help button left of the X, then Report a bug (or type /gmf bug). Press Ctrl+C, then paste it in a new issue at github.com/swiftyPigeon/GuildMasterForever/issues, with a line on what you were doing. The address is at the top of the report and on the help page." },
 		{ id = "help-blocked", topic = "install-update-bugs",
 			q = { "The game says it blocked Guild Master Forever", "I got an 'action blocked' error" },
 			text = "A /reload clears it. Then report it: Guild Master Forever window, help button, Report a bug (not /gmf bug with the gamepad).",

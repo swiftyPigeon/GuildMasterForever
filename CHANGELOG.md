@@ -86,4 +86,4 @@ everyone in your guild who installs it shares the same tools, with no files to e
 off until they're reviewed); Discord Link.
 
 **Bugs and ideas:** `/gmf bug`, then paste the report in a new issue at
-https://github.com/swiftyPigeon/Guild_Master_Forever/issues
+https://github.com/swiftyPigeon/GuildMasterForever/issues
