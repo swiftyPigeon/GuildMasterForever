@@ -4,7 +4,7 @@ Guild tools for **WoW: Forever**: guild chats, layer hop, party gathering, map c
 and officer tools. Main command: **`/gmf`**.
 
 Version **0.1.1**, for a single guild (networks of several guilds come in 0.2.0).
-How to use it: **[GUIDE.md](GUIDE.md)**. What changed: [CHANGELOG.md](CHANGELOG.md). Networks of
+How to use it: **[GUIDE.md](GUIDE.md)**. What changed: the notes of each file on CurseForge. Networks of
 guilds (coming in 0.2.0) and who will notice their security: [NETWORKS.md](NETWORKS.md). Found a
 security problem? Report it privately: [SECURITY.md](SECURITY.md).
 
