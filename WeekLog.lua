@@ -61,6 +61,27 @@ Wing({ "Darkmaster Gandling" }, "Darkmaster Gandling")
 Wing({ "The Unforgiven", "Hearthsinger Forresten", "Timmy the Cruel", "Willey Hopebreaker", "Commander Malor", "Instructor Galford",
 	"Balnazzar", "Baroness Anastari", "Nerub'enkan", "Maleki the Pallid", "Magistrate Barthilas", "Ramstein the Gorger", "Lord Aurius Rivendare" },
 	"Balnazzar", "Lord Aurius Rivendare")
+-- Forever's new dungeons (1.3.3). Forever sends ENCOUNTER_END in 5-player dungeons too (a Ruins of
+-- Lordaeron run, 2026-11-10: all six bosses by name), so the names below matter most for their last
+-- boss, which ends the run. Only where a guide names it (Warcraft Tavern, 2026-11-11). The Drowned
+-- City, Krol'dok Stronghold, Alcaz Prison, Blackmaw Hold and Shaper's Terrace: their guides are still
+-- datamined and name no last boss, so their runs show "not completed" until one is added here.
+Wing({ "Faldrim Anvilmar", "Magmatus", "Plunder", "Durgen Dirgehammer" }, "Durgen Dirgehammer") -- Hall of Thanes
+Wing({ "Witherfang", "The Butcher", "The Baron", "Viktor the Vile", "The Abandoned", "Bjork", "Rath'mael" }, "Rath'mael") -- Ruins of Lordaeron
+Wing({ "Saltspine", "Shadetooth", "Highland Horror", "Relic Guardian" }, "Relic Guardian") -- Excavation Site
+Wing({ "Atrexis the Grave Knight", "Lyn the Ignored", "Mana Devourer", "Arcane Anomaly", "Fel Ancient", "Arcanic Enigma",
+	"Unstable Sentry", "Shade of the Archmage" }, "Shade of the Archmage") -- City of Dalaran
+
+-- A run is completed once any of its bosses is a last boss: read from its bosses each time (1.3.3),
+-- so a run saved before its dungeon's last boss was known here shows completed too.
+function Log.Done(r)
+	if type(r) ~= "table" then return false end
+	if r.done then return true end
+	for _, b in ipairs(type(r.bosses) == "table" and r.bosses or {}) do
+		if type(b) == "string" and LAST[b:lower()] then return true end
+	end
+	return false
+end
 
 ---------------------------------------------------------------------------
 -- The store: ns.db.weekLog = { [week] = { runs = { ... }, places = { ... }, mates = { [name] = { s, by } } } }
@@ -123,8 +144,10 @@ local function Entered()
 	run = { char = c, where = name, t = now, last = now, bosses = {}, loot = {} }
 	t.runs[#t.runs + 1] = run
 end
+-- A secret value (Forever: a unit's name, an encounter's) is never read: skipped (1.3.3).
+local function Secret(v) return issecretvalue ~= nil and issecretvalue(v) == true end
 local function Boss(name)
-	if not run or type(name) ~= "string" or name == "" then return end
+	if not run or Secret(name) or type(name) ~= "string" or name == "" then return end
 	for _, b in ipairs(run.bosses) do if b == name then return end end
 	run.bosses[#run.bosses + 1] = name
 	run.last = ns.Now()
@@ -144,7 +167,7 @@ function Log.LookForBosses()
 		local ok, name = pcall(function()
 			if UnitExists(u) and UnitIsDead(u) and not UnitIsPlayer(u) then return UnitName(u) end
 		end)
-		if ok and type(name) == "string" and BOSS[name:lower()] then Boss(name) end
+		if ok and not Secret(name) and type(name) == "string" and BOSS[name:lower()] then Boss(name) end
 	end
 end
 
@@ -202,6 +225,92 @@ end
 -- Guild Life
 ---------------------------------------------------------------------------
 
+-- A plain string the addon may read: never a secret value (Forever), never empty.
+local function Plain(v)
+	if issecretvalue and issecretvalue(v) then return false end
+	return type(v) == "string" and v ~= ""
+end
+Log.Plain = Plain -- (tests)
+
+-- In our own roster, by the name alone: Forever names are one per region, and the game may give a
+-- party member's name without the realm the roster's names carry.
+local function InRoster(name)
+	if ns.Roster.RankOf(ns.FullName(name)) ~= nil then return true end
+	local byName, short = ns.Roster.byName, ns.ShortName(name)
+	if type(byName) ~= "table" then return false end
+	for full in pairs(byName) do
+		if ns.ShortName(full) == short then return true end
+	end
+	return false
+end
+
+-- The other branch, while the game won't say: it gives no guild for a party member far away
+-- (another continent: GetGuildInfo is nil). Who the game last showed in a house guild is
+-- remembered (ns.db.houseSeen, by short name, HOUSE_SEEN_KEEP); the King's pinned character and
+-- the other branch's leader and officers are known from the census reports (Data.KnownRank).
+Log.HOUSE_SEEN_KEEP = 60 * 24 * 3600
+local function Now() return (time and time()) or 0 end
+local function HouseSeen()
+	local db = ns.db
+	if not db then return nil end
+	if type(db.houseSeen) ~= "table" then db.houseSeen = {} end
+	return db.houseSeen
+end
+local function Remember(name, guild)
+	local seen = HouseSeen()
+	if not seen then return end
+	local short = ns.ShortName(name)
+	if ns.IsHouseGuild(guild) then seen[short] = { g = guild, t = Now() } else seen[short] = nil end
+end
+local function KnownInHouse(name)
+	local seen = HouseSeen()
+	local e = seen and seen[ns.ShortName(name)]
+	if type(e) == "table" and ns.IsHouseGuild(e.g) and Now() - (tonumber(e.t) or 0) <= Log.HOUSE_SEEN_KEEP then return true end
+	local full = ns.FullName(name)
+	if ns.IsKingCharacter and ns.IsKingCharacter(full) then return true end
+	local mine = ns.GetGuildInfo and ns.GetGuildInfo("player")
+	for _, g in ipairs({ ns.HomeGuild and ns.HomeGuild() or false, ns.ALT_GUILD_NAME or false }) do
+		if type(g) == "string" and g ~= "" and g ~= mine and ns.Data and ns.Data.KnownRank then
+			local ok, rank = pcall(ns.Data.KnownRank, full, g)
+			if ok and rank ~= nil then return true end
+		end
+	end
+	return false
+end
+function Log.ForgetOldSeen()
+	local seen, now = HouseSeen(), Now()
+	if not seen then return end
+	for short, e in pairs(seen) do
+		if type(e) ~= "table" or now - (tonumber(e.t) or 0) > Log.HOUSE_SEEN_KEEP then seen[short] = nil end
+	end
+end
+
+-- 1.3.3: the guildmate in a group slot, by full name, or nil. Forever names are two words and
+-- UnitName can give the first alone, which no roster entry matches ("grouped with" stayed empty):
+-- the full name comes from GetUnitName(unit, true), or UnitFullName. One of us is anyone in either
+-- guild of the house (the home guild and its alt guild, if any: ns.IsHouseGuild) by the guild the
+-- game shows, or, when it shows none (far away), anyone in our roster or known to be of the house
+-- (KnownInHouse). Secret values are skipped, never read.
+function Log.GroupMate(unit)
+	local ok, name, guild = pcall(function()
+		if not UnitExists(unit) or not UnitIsPlayer(unit) then return nil end
+		local full = GetUnitName and GetUnitName(unit, true)
+		if not Plain(full) or not full:find(" ", 1, true) then
+			local first, realm = UnitFullName(unit)
+			if Plain(first) then full = Plain(realm) and (first .. "-" .. realm) or first end
+		end
+		return full, (GetGuildInfo(unit))
+	end)
+	if not ok or not Plain(name) then return nil end
+	name = ns.Normal(name)
+	if Plain(guild) then
+		Remember(name, guild)
+		return ns.IsHouseGuild(guild) and name or nil
+	end
+	if InRoster(name) or KnownInHouse(name) then return name end
+	return nil
+end
+
 function Log.SampleGroup()
 	if not (IsInGroup and IsInGroup()) then return end
 	local t = Store()
@@ -209,10 +318,11 @@ function Log.SampleGroup()
 	local raid = IsInRaid and IsInRaid()
 	local n = GetNumGroupMembers and GetNumGroupMembers() or 0
 	local c = Char()
+	Log.ForgetOldSeen()
 	for i = 1, n do
 		local unit = raid and ("raid" .. i) or (i <= 4 and ("party" .. i))
-		local ok, name = pcall(function() return unit and UnitName(unit) end)
-		if ok and type(name) == "string" and name ~= "" and ns.Roster.RankOf(ns.FullName(name)) ~= nil then
+		local name = unit and Log.GroupMate(unit)
+		if name then
 			local key = ns.ShortName(name)
 			if key ~= c then
 				local m = t.mates[key] or { s = 0, by = {} }
@@ -263,7 +373,7 @@ function Log.Summary()
 	local done, loot, places = 0, 0, #t.places
 	local cleared = {}
 	for _, r in ipairs(t.runs) do
-		if r.done then done = done + 1 cleared[#cleared + 1] = r.where end
+		if Log.Done(r) then done = done + 1 cleared[#cleared + 1] = r.where end
 		loot = loot + #(r.loot or {})
 	end
 	local mates = Mates(t)
@@ -301,7 +411,7 @@ function Log.Lines(lines, q)
 	for i = #t.runs, 1, -1 do
 		local r = t.runs[i]
 		if Want(r.where, r.char) then
-			local state = r.done and Green(L.WEEKLOG_COMPLETED) or Grey(L.WEEKLOG_NOT_DONE)
+			local state = Log.Done(r) and Green(L.WEEKLOG_COMPLETED) or Grey(L.WEEKLOG_NOT_DONE)
 			lines[#lines + 1] = { indent = 1, text = Gold(r.where) .. "  " .. Grey("(" .. r.char .. ")"),
 				right = state .. "  " .. Grey(L.WEEKLOG_BOSSES:format(#r.bosses)),
 				tooltip = function(tt)
