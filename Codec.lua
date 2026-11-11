@@ -556,7 +556,10 @@ end
 
 -- `text` must already be sanitized and split to fit (Channels.Send does both).
 function Codec.EncodeChat(tier, guild, id, class, text, race, sex)
-	local msg = ("M1~%s~%s~%d~%s~"):format(tier, clean(guild), id % 10000, clean(class or "")) .. Codec.LookTag(race, sex) .. text
+	-- 0.1.3: no look tag on the wire. WoW: Forever's server drops, without a word, a logged add-on
+	-- message holding control bytes, and the tag is made of them: no chat line reached another
+	-- client. The race and sex stay on our own echo; TakeLook still reads an old tag.
+	local msg = ("M1~%s~%s~%d~%s~"):format(tier, clean(guild), id % 10000, clean(class or "")) .. text
 	if #msg > 255 then return nil end
 	return msg
 end
