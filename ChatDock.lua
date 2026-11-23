@@ -692,8 +692,12 @@ function Dock.TalkKeyWanted()
 	local ok, own = pcall(GetBindingKey, Dock.TALK_ACTION)
 	if not ok or (own ~= nil and Str(own) == nil) then return false end
 	if Str(own) then return false end
-	local ok2, action = pcall(GetBindingAction, Dock.TALK_KEY, false)
-	return ok2 and Str(action) == ""
+	-- Overrides counted too: another add-on may borrow Ctrl+Enter the same way; ours (held) is no reason
+	-- to let it go. (Read without overrides, two add-ons each saw it free and both borrowed it.)
+	local ok2, action = pcall(GetBindingAction, Dock.TALK_KEY, true)
+	if not ok2 then return false end
+	action = Str(action)
+	return action == "" or (talkHeld and action == Dock.TALK_ACTION) or false
 end
 
 function Dock.SyncTalkKey()
