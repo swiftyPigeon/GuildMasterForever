@@ -282,6 +282,78 @@ local function MentorLines(lines, q)
 	return lines
 end
 
+-- 0.1.5 (the user's call): officers' view of how often each member grouped with the guild's
+-- players (Grouped.lua), the most first. Everyone of the roster, online or not.
+local function Plural(n, one, many) return n == 1 and L[one] or L[many]:format(n) end
+local function GroupedLines(lines, q)
+	local V = ns.Views
+	V.GreyRows(lines, L.GROUPED_HINT, { gapAfter = true })
+	local counts = ns.Grouped and ns.Grouped.MemberCounts() or {}
+	local list = {}
+	for _, m in ipairs(ns.Roster.members or {}) do
+		if not q or ns.Holds(q, m.name, m.rank, (ClassName(m))) then
+			local c = counts[ns.Grouped.Key(m.raw)]
+			list[#list + 1] = { m = m, c = c, n = c and c.count or 0 }
+		end
+	end
+	table.sort(list, function(a, b)
+		if a.n ~= b.n then return a.n > b.n end
+		return a.m.name < b.m.name
+	end)
+	local shown = math.min(#list, page.shown)
+	for i = 1, shown do
+		local m, c, n = list[i].m, list[i].c, list[i].n
+		local _, file = ClassName(m)
+		lines[#lines + 1] = {
+			key = m.name,
+			text = V.ClassColored(m.name, file) .. "  " .. V.Grey(Plain(m.rank or "")),
+			right = (n > 0 and (V.Gold(Plural(n, "GROUPED_TIMES_ONE", "GROUPED_TIMES")) .. "  "
+					.. V.Grey(Plural(c.mates or 0, "GROUPED_MATES_ONE", "GROUPED_MATES") .. ", " .. Plural(c.dayCount or 0, "GROUPED_DAYS_ONE", "GROUPED_DAYS")))
+					or V.Grey(L.GROUPED_TIMES:format(0)))
+				.. "  " .. (m.online and V.Green(L.ONLINE_NOW) or V.Grey(Members.LastOnline(m.days))),
+			tooltip = function(tt)
+				tt:AddLine(Plain(m.name), 1, 0.82, 0)
+				if c and c.person and c.person ~= ns.Grouped.Key(m.raw) then
+					tt:AddLine(L.GROUPED_ALT_OF:format(Plain(ns.DisplayName(c.person) or c.person), c.via == "note" and L.GROUPED_VIA_NOTE or L.GROUPED_VIA_LINK), 0.6, 0.8, 1, true)
+				end
+				tt:AddLine(L.GROUPED_TIP:format(n, c and c.confirmed or 0, c and c.allTime or 0,
+					c and c.last and ns.Ago(c.last) or L.GROUPED_NEVER), 1, 1, 1, true)
+				if c and n > 0 then
+					tt:AddLine(L.GROUPED_SOURCES2:format(c.byOthers or 0, Plural(c.vouched or 0, "GROUPED_MEMBERS_ONE", "GROUPED_MEMBERS"), c.selfOnly or 0), 0.8, 0.8, 0.8, true)
+					tt:AddLine(L.GROUPED_BREADTH2:format(Plural(c.mates or 0, "GROUPED_PLAYERS_ONE", "GROUPED_PLAYERS"), Plural(c.dayCount or 0, "GROUPED_DAYS_ONE", "GROUPED_DAYS")), 0.8, 0.8, 0.8, true)
+				end
+				if c and c.chars then
+					local parts = {}
+					for k in pairs(c.chars) do
+						local own = counts[k] and (counts[k].own or counts[k])
+						parts[#parts + 1] = Plain(ns.DisplayName(k) or k) .. " " .. (own and own.count or 0)
+					end
+					table.sort(parts)
+					tt:AddLine(L.GROUPED_CHARS:format(table.concat(parts, ", ")), 0.8, 0.8, 0.8, true)
+				end
+				if c and c.with then
+					local mates = {}
+					for k, times in pairs(c.with) do mates[#mates + 1] = { k = k, n = times } end
+					table.sort(mates, function(a, b) return a.n > b.n end)
+					local names = {}
+					for j = 1, math.min(3, #mates) do names[#names + 1] = Plain(ns.DisplayName(mates[j].k) or mates[j].k) .. " (" .. mates[j].n .. ")" end
+					if #names > 0 then tt:AddLine(L.GROUPED_WITH:format(table.concat(names, ", ")), 0.8, 0.8, 0.8, true) end
+				end
+			end,
+		}
+	end
+	if #list > shown then
+		lines[#lines + 1] = {
+			text = V.Gold(L.SHOW_MORE:format(math.min(Members.PAGE, #list - shown), shown, #list)),
+			onClick = function()
+				page.shown = page.shown + Members.PAGE
+				ns.UI.Refresh()
+			end,
+		}
+	end
+	return lines
+end
+
 function Members.ResetForTests()
 	page, lastRemove, lastMentor, firstRoster = nil, -math.huge, -math.huge, nil
 	wipe(removed)
@@ -358,8 +430,19 @@ function Members.Lines(q)
 	elseif page.filter == "recruits" then
 		page.filter = Members.FILTERS[1]
 	end
+	-- Officers': how often each member grouped with the guild's players (0.1.5, Grouped.lua).
+	if ns.Roster.IsOfficer() and ns.Grouped then
+		local on = page.filter == "grouped"
+		lines[#lines + 1] = {
+			text = on and V.Gold("> " .. L.GROUPED_FILTER) or ("   " .. L.GROUPED_FILTER),
+			onClick = not on and function() Members.Show("grouped") end or nil,
+		}
+	elseif page.filter == "grouped" then
+		page.filter = Members.FILTERS[1]
+	end
 	lines[#lines].gapAfter = true
 	if page.filter == "recruits" then return MentorLines(lines, q) end
+	if page.filter == "grouped" then return GroupedLines(lines, q) end
 	local canRemove = Members.CanRemove()
 	lines[#lines + 1] = { text = V.Grey(canRemove and L.MEMBERS_REMOVE_HINT or L.MEMBERS_VIEW_HINT) }
 	-- The game lists only who is online (its "Show offline members" unticked): say so.

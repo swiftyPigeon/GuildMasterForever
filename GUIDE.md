@@ -160,6 +160,13 @@ your own add-on saw around you; nothing is sent.
 | Hide the minimap button | `/gmf minimap` |
 | Back up your settings | `/gmf backup` copies them as text; `/gmf restore` pastes them back |
 
+**Groups for your officers (0.1.5).** When you've been in a group for 5 minutes or more with players
+of your guild (or its network), your add-on tells your guild's officers: when it started, how long it
+lasted, and which guildmates were in it. No zone, position or chat goes with it, and only officers'
+add-ons keep it. Officers use it to see who plays with the guild, for promotions. It's on unless you
+switch off **Groups with your guild's players** in `/gmf privacy`. You can still be counted when a
+guildmate's add-on names you.
+
 ### Something's wrong?
 1. `/gmf status` shows what the add-on sees (your guild, the channel, your layer).
 2. `/gmf bug` opens a **bug report** (also **Help** → **Report a bug**). Press **Ctrl+C**, then open a
@@ -189,6 +196,17 @@ Everything above, plus:
 | Check a player's gear | target them in range, then `/gmf gear` |
 | Write loot decisions and points | **Guild** → **Raid Loot** (`/gmf loot`): click a drop, pick who gets it and why |
 | Answer recruits | a recruit's request shows **Invite** and **Decline** buttons |
+| See who plays with the guild (for promotions) | a small number left of each name in your guild on the **Guild** tab (and in the game's guild roster): how many groups of 5+ minutes that member was in with guildmates, the last 4 weeks. Under your guild, **Grouped with the guild** opens everyone ranked, with how many different guildmates and days. Hover a name for who reported it |
+
+**Reading the grouping counts.** They're a **minimum**: a group counts only when someone in it runs
+Guild Master Forever 0.1.5 or later and shares (members without the add-on are counted when grouped
+with someone who has it). The same guildmates grouping again within 30 minutes count once; a group
+with someone else is a new group. Alts count with their main, by linked alts or a guild or officer
+note such as "alt of Name" or "Alt - Name". A note that only says **ALT** goes under the one guildmate
+with the same second name whose note isn't alt. Groups **reported by others** weigh more than ones
+only the member reported: the tooltip shows both. Where your add-on watched the roster, reports from
+someone shown offline at the time are dropped. Officers' add-ons share what they've heard with each
+other, so counts fill in for officers who were away.
 
 **The guild's channel is sealed automatically.** The first officer online makes a random key nobody
 sees, and the add-on hands it to guildmates over guild chat. If you think it leaked, `/gmf key rotate`
