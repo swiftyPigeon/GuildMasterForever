@@ -1,7 +1,7 @@
 local ADDON, ns = ...
 local L = ns.L
 
--- Grouped with the guild (0.1.5, the user's call): for promotions, officers see how many groups
+-- Grouped with the guild (0.1.4, the user's call): for promotions, officers see how many groups
 -- each member was in with at least one player of the guild (the home guild, its alt guild, or a
 -- guild of the network) over the last 4 weeks (Members.lua, its "Grouped" view; Views.lua).
 --
@@ -258,7 +258,7 @@ function Grouped.HandleAsk(dist, sender, text)
 	end)
 end
 
--- Officers hand each other what they heard (0.1.5): another officer asked
+-- Officers hand each other what they heard (0.1.4): another officer asked
 -- (ZQ), so one officer online answers with every report held since then, the newest first,
 --   Z2~<reporter>~<start>~<seconds>~<name>,<name>,...   (GUILD; officers only send or keep it)
 -- Each waits a few random seconds and stays quiet if another officer started handing on first.
@@ -663,7 +663,7 @@ function Grouped.MemberCounts()
 end
 
 ---------------------------------------------------------------------------
--- The count beside each name in the game's guild roster (officers, 0.1.5)
+-- The count beside each name in the game's guild roster (officers, 0.1.4)
 ---------------------------------------------------------------------------
 -- The Guild & Communities window is Blizzard's: nothing of it is changed or hooked. A frame of
 -- ours, while that roster shows, reads which member rows are on screen (their member info) and

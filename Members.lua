@@ -282,7 +282,7 @@ local function MentorLines(lines, q)
 	return lines
 end
 
--- 0.1.5 (the user's call): officers' view of how often each member grouped with the guild's
+-- 0.1.4 (the user's call): officers' view of how often each member grouped with the guild's
 -- players (Grouped.lua), the most first. Everyone of the roster, online or not.
 local function Plural(n, one, many) return n == 1 and L[one] or L[many]:format(n) end
 local function GroupedLines(lines, q)
@@ -430,7 +430,7 @@ function Members.Lines(q)
 	elseif page.filter == "recruits" then
 		page.filter = Members.FILTERS[1]
 	end
-	-- Officers': how often each member grouped with the guild's players (0.1.5, Grouped.lua).
+	-- Officers': how often each member grouped with the guild's players (0.1.4, Grouped.lua).
 	if ns.Roster.IsOfficer() and ns.Grouped then
 		local on = page.filter == "grouped"
 		lines[#lines + 1] = {

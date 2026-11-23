@@ -583,7 +583,7 @@ end
 -- The docked button shown for members, lit while the small chat is open; the Crafters' icon in its
 -- title bar lit while the small Crafters window is open.
 -- Whether the button is for this character: true, false, or nil while the game can't say yet.
--- (0.1.5: after a loading screen, a zeppelin's or a boat's, the button went and stayed gone until
+-- (0.1.4: after a loading screen, a zeppelin's or a boat's, the button went and stayed gone until
 -- Ctrl+Enter. Right after a loading screen the game says we are in a guild before it says which
 -- one: "no guild name" then read as "not a member", and the button hid until the next check.)
 function Dock.ForMe()

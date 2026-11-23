@@ -160,7 +160,7 @@ your own add-on saw around you; nothing is sent.
 | Hide the minimap button | `/gmf minimap` |
 | Back up your settings | `/gmf backup` copies them as text; `/gmf restore` pastes them back |
 
-**Groups for your officers (0.1.5).** When you've been in a group for 5 minutes or more with players
+**Groups for your officers (0.1.4).** When you've been in a group for 5 minutes or more with players
 of your guild (or its network), your add-on tells your guild's officers: when it started, how long it
 lasted, and which guildmates were in it. No zone, position or chat goes with it, and only officers'
 add-ons keep it. Officers use it to see who plays with the guild, for promotions. It's on unless you
@@ -199,7 +199,7 @@ Everything above, plus:
 | See who plays with the guild (for promotions) | a small number left of each name in your guild on the **Guild** tab (and in the game's guild roster): how many groups of 5+ minutes that member was in with guildmates, the last 4 weeks. Under your guild, **Grouped with the guild** opens everyone ranked, with how many different guildmates and days. Hover a name for who reported it |
 
 **Reading the grouping counts.** They're a **minimum**: a group counts only when someone in it runs
-Guild Master Forever 0.1.5 or later and shares (members without the add-on are counted when grouped
+Guild Master Forever 0.1.4 or later and shares (members without the add-on are counted when grouped
 with someone who has it). The same guildmates grouping again within 30 minutes count once; a group
 with someone else is a new group. Alts count with their main, by linked alts or a guild or officer
 note such as "alt of Name" or "Alt - Name". A note that only says **ALT** goes under the one guildmate

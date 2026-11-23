@@ -368,7 +368,7 @@ Consent.Register({
 	get = function() return ns.db.rollCall end,
 	set = function(on) ns.Workshop.SetAnswers(on) end,
 })
--- 0.1.5: groups with the guild's players told to our guild's officers (Grouped.lua). On unless a No.
+-- 0.1.4: groups with the guild's players told to our guild's officers (Grouped.lua). On unless a No.
 Consent.Register({
 	key = "grouped", label = "CONSENT_GROUPED", text = "CONSENT_GROUPED_TEXT",
 	get = function() return ns.db.shareGroups ~= false end,

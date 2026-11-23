@@ -256,7 +256,7 @@ local function Remember(name, guild)
 	local seen = HouseSeen()
 	if not seen then return end
 	local short = ns.ShortName(name)
-	-- (0.1.5: any guild of the network is remembered, for Grouped.lua; the house checks below still ask
+	-- (0.1.4: any guild of the network is remembered, for Grouped.lua; the house checks below still ask
 	-- for the house: another guild's player never passes for one of the house.)
 	local ours = ns.IsHouseGuild(guild) or (ns.IsNetworkGuild ~= nil and ns.IsNetworkGuild(guild))
 	if ours then seen[short] = { g = guild, t = Now() } else seen[short] = nil end
@@ -276,7 +276,7 @@ local function KnownInHouse(name)
 	end
 	return false
 end
--- 0.1.5 (Grouped.lua): a player of any guild of the network, seen near us in the last HOUSE_SEEN_KEEP.
+-- 0.1.4 (Grouped.lua): a player of any guild of the network, seen near us in the last HOUSE_SEEN_KEEP.
 local function KnownInFederation(name)
 	local seen = HouseSeen()
 	local e = seen and seen[ns.ShortName(name)]
@@ -297,7 +297,7 @@ end
 -- guild of the house (the home guild and its alt guild, if any: ns.IsHouseGuild) by the guild the
 -- game shows, or, when it shows none (far away), anyone in our roster or known to be of the house
 -- (KnownInHouse). Secret values are skipped, never read.
--- `anyGuild` (0.1.5, Grouped.lua): anyone of any guild of the network by the guild the game shows.
+-- `anyGuild` (0.1.4, Grouped.lua): anyone of any guild of the network by the guild the game shows.
 function Log.GroupMate(unit, anyGuild)
 	local ok, name, guild = pcall(function()
 		if not UnitExists(unit) or not UnitIsPlayer(unit) then return nil end

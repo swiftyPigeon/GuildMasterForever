@@ -851,7 +851,7 @@ local function NoMatch() return { text = Grey(L.SEARCH_NO_MATCH) } end
 -- (the home guild, the alt guild) rank 1 is the moderator, the moderators.
 local function OfficerTitle(guild) return ns.IsHouseGuild(guild) and L.MODERATOR or L.CAPTAIN end
 local function OfficersTitle(guild) return ns.IsHouseGuild(guild) and L.MODERATORS or L.CAPTAINS end
--- 0.1.5: the grouped counts (Grouped.lua) by short name, for our own guild and an officer only;
+-- 0.1.4: the grouped counts (Grouped.lua) by short name, for our own guild and an officer only;
 -- nil otherwise. (Short names: Forever's are unique, and guildmates can sit on two realms.)
 function Views.GroupedCounts(guild)
 	if not (ns.Grouped and ns.Roster.IsOfficer() and guild == ns.GetGuildInfo("player")) then return nil end
@@ -1925,7 +1925,7 @@ local function RealmLines(s, q)
 	-- closes and opens what the search opened, instead of the guild itself.
 	local function Guild(e, open, only, folds)
 		local g = e.g
-		-- 0.1.5 (the user): our own guild, for officers: how many groups each was in with the guild's
+		-- 0.1.4 (the user): our own guild, for officers: how many groups each was in with the guild's
 		-- players in the last 4 weeks (Grouped.lua), a small number left of the name.
 		local grouped = open and Views.GroupedCounts(e.name)
 		local function Times(name) return grouped and Views.GroupedMark(grouped, name) or "" end
@@ -2047,7 +2047,7 @@ local function RealmLines(s, q)
 				tt:AddLine(L.MEMBERS_OPEN_TIP, 1, 1, 1, true)
 			end or nil,
 		}
-		-- 0.1.5: officers open the Members page's Grouped view from here.
+		-- 0.1.4: officers open the Members page's Grouped view from here.
 		if own and grouped then
 			local prev = lines[#lines]
 			prev.gapAfter = nil
