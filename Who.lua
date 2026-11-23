@@ -138,6 +138,7 @@ local function MaxLevel()
 	local max = GetMaxPlayerLevel and tonumber(GetMaxPlayerLevel())
 	return (max and max >= 1) and math.floor(max) or 60
 end
+Who.MaxLevel = MaxLevel -- (0.1.4: the Nearby tab's level ranges, Finder.lua)
 
 function Who.WindowOpen()
 	for _, name in ipairs(WINDOWS) do
@@ -253,9 +254,12 @@ end
 -- Who.WantName), for the guild it shows (Who.SeenGuild); the round goes on where it was too.
 -- With the gamepad UI only the player's own searches go, plainly (see the top of this file):
 -- the round's, and one guild's their click asked for (Who.SearchGuild with `own`); never a name.
+-- `open` = { query, onAnswer }: the Nearby tab's search (Finder.lua), anyone at all, not only
+-- the network's guilds. Its answer goes to open.onAnswer(rows, shown, total), every player listed
+-- once; the round goes on where it was, as for a guild's.
 local toldPlain = false
-function Who.Search(quiet, guild, name)
-	if not (guild or name) and not Who.Query() then return false end -- single guild: no network to search
+function Who.Search(quiet, guild, name, open)
+	if not (guild or name or open) and not Who.Query() then return false end -- single guild: no network to search (Nearby still searches)
 	local plain = ns.GamepadUI()
 	if plain and (quiet or name) then return false end
 	local now = GetTime()
@@ -275,12 +279,12 @@ function Who.Search(quiet, guild, name)
 	local old = sweep.started and now - sweep.started > Who.ROUND_TTL
 	if not sweep.done and old then NewSweep() end
 	-- The round done: the misspelled names next (VARIANTS), then it starts over.
-	local own = guild or name -- one guild's or one player's search: the round stays where it is
+	local own = guild or name or open -- one guild's, one player's or an open search: the round stays where it is
 	local variant = not own and sweep.done and not old and sweep.variant < #Who.VARIANTS and sweep.variant + 1 or nil
 	if sweep.done and not own and not variant then sweep.step = 0 end
 	-- A level range is a plain "lo-hi" in the filter, like the Who window's default search.
 	local b = not own and not variant and sweep.step > 0 and sweep.brackets[sweep.step]
-	local query = guild and ('g-"%s"'):format(guild) or name and ('n-"%s"'):format(ns.TellName(name))
+	local query = open and open.query or guild and ('g-"%s"'):format(guild) or name and ('n-"%s"'):format(ns.TellName(name))
 		or variant and ('g-"%s"'):format(Who.VARIANTS[variant]) or b and ("%s %d-%d"):format(Who.Query(), b[1], b[2]) or Who.Query()
 	local frames, names = {}, {}
 	if not plain then
@@ -289,7 +293,7 @@ function Who.Search(quiet, guild, name)
 	end
 	lastId = lastId + 1
 	local id = lastId
-	pending = { id = id, frames = frames, step = sweep.step, query = query, guild = guild, name = name, variant = variant }
+	pending = { id = id, frames = frames, step = sweep.step, query = query, guild = guild, name = name, variant = variant, open = open }
 	owed = nil -- a search given up before this one: its answer would now pass for this one's
 	Who.lastSend = now
 	-- Scheduled first: whatever fails from here on, the who windows get their event back.
@@ -303,7 +307,7 @@ function Who.Search(quiet, guild, name)
 		Release("send failed")
 		error(err, 0)
 	end
-	if not quiet then ns.Print(L.RECRUIT_SEARCHING) end
+	if not quiet then ns.Print(open and L.FINDER_SEARCHING or L.RECRUIT_SEARCHING) end
 	if plain and not toldPlain then
 		toldPlain = true
 		ns.Print(L.WHO_GAMEPAD)
@@ -391,6 +395,11 @@ function Who.Auto()
 	if Who.autoOff then return false end
 	if not ((C_FriendList and C_FriendList.SendWho) or SendWho) then return false end
 	if ns.GamepadUI() then return false end -- quiet: not with the gamepad UI (see the top)
+	-- 0.1.4: not while the Nearby tab shows: its Search button is the player's /who there, and a
+	-- quiet one of ours would make it wait COOLDOWN.
+	local win = ns.UI and ns.UI.Frame and ns.UI.Frame()
+	if win and win.IsShown and win:IsShown() and win.tab == "finder" then return false end
+	if ns.ChatDock and ns.ChatDock.NearbyShown and ns.ChatDock.NearbyShown() then return false end -- (its small window too)
 	local now = GetTime()
 	if pending or Wait(now, math.max(Who.lastSend, Who.lastPlain)) > 0 or Who.WindowOpen() then return false end
 	-- A guild opened in the Realm tab while a search could not go comes first.
@@ -485,6 +494,26 @@ local function Read()
 	return rows, shown, total
 end
 
+-- 0.1.4: everyone the answer lists, each once (the Nearby tab, Finder.lua): { name, guild,
+-- level, class (its file, "WARRIOR"), zone }, guild nil for none.
+local function ReadAll()
+	local shown, total = Counts()
+	local rows, byName = {}, {}
+	for i = 1, shown do
+		local name, guild, level, class, zone = Info(i)
+		if name and name ~= "" then
+			Saw(name, guild)
+			if not byName[name] then
+				local gname = type(guild) == "string" and guild ~= "" and (Who.GuildName(guild)) or nil
+				local p = { name = name, guild = gname, level = tonumber(level), class = class, zone = zone }
+				byName[name] = p
+				rows[#rows + 1] = p
+			end
+		end
+	end
+	return rows, shown, total
+end
+
 local function Merge(rows)
 	for _, p in ipairs(rows) do
 		local known = sweep.byName[p.name]
@@ -511,8 +540,19 @@ local function OnAnswer()
 		end
 		return
 	end
-	local rows, shown, total = Read()
 	local first = not p.answered
+	if p.open then
+		-- 0.1.4: an open search's answer (the Nearby tab): its own list, the round stays where it was.
+		local rows, shown, total = ReadAll()
+		if first then
+			p.answered = true
+			ns.After(Who.SETTLE, "who settle", function() if pending == p then Release("answered") end end)
+			ns.Log("who: %s answered %d of %d (open)", p.query, shown, total)
+		end
+		if p.open.onAnswer then ns.SafeCall("who open answer", p.open.onAnswer, rows, shown, total, first) end
+		return
+	end
+	local rows, shown, total = Read()
 	if p.name then
 		-- One player's search (Who.WantName): Read kept the guild it showed.
 		if first then

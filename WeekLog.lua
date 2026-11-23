@@ -188,11 +188,7 @@ function Log.OnLoot(text)
 	local link = text:match("|c%x+|Hitem:[^|]+|h%[[^%]]*%]|h|r")
 	local id = link and tonumber(link:match("|Hitem:(%d+)"))
 	if not id then return end
-	local quality
-	if GetItemInfo then
-		local ok, _, _, q = pcall(GetItemInfo, link)
-		if ok then quality = q end
-	end
+	local _, _, quality = ns.ItemInfo(link)
 	local color = link:match("^|c(%x%x%x%x%x%x%x%x)")
 	if not ((quality and quality >= 3) or (not quality and color and RARE_COLORS[color:lower()])) then return end
 	run.loot[#run.loot + 1] = id
@@ -347,7 +343,7 @@ local function Hours(s)
 	return L.WEEKLOG_HOURS:format(math.floor(m / 60), m % 60)
 end
 local function ItemText(id)
-	local name, link = GetItemInfo and GetItemInfo(id)
+	local name, link = ns.ItemInfo(id)
 	return link or name or ("item " .. id)
 end
 
@@ -400,7 +396,31 @@ function Log.Share(where)
 	end
 end
 
-function Log.Lines(lines, q)
+-- Guild Life alone: the guildmates grouped with most this week (0.1.4, the user: at the top of
+-- Your Week, WeeklyBrief.lua).
+function Log.MatesLines(lines, q)
+	local t = Store()
+	if not t then return lines end
+	local mates = Mates(t)
+	lines[#lines + 1] = { header = true, text = L.WEEKLOG_MATES,
+		tooltip = function(tt) tt:AddLine(L.WEEKLOG_MATES, 1, 0.82, 0); tt:AddLine(L.WEEKLOG_MATES_TIP, 1, 1, 1, true) end }
+	if #mates == 0 then lines[#lines + 1] = { indent = 1, text = Grey(L.WEEKLOG_NO_MATES) } end
+	for i = 1, math.min(Log.MATES_SHOWN, #mates) do
+		local m = mates[i]
+		if not q or ns.Holds(q, m.name) then
+			local by = {}
+			for c in pairs(m.by) do by[#by + 1] = c end
+			table.sort(by)
+			lines[#lines + 1] = { indent = 1, text = m.name, right = Gold(Hours(m.s)) .. "  " .. Grey(table.concat(by, ", ")) }
+		end
+	end
+	lines[#lines].gapAfter = true
+	return lines
+end
+
+-- The rest of the recap: dungeons, newly discovered, then Guild Life unless `noMates` (already
+-- drawn above), then Share.
+function Log.Lines(lines, q, noMates)
 	local t = Store()
 	if not t then return lines end
 	local function Want(...) return not q or ns.Holds(q, ...) end
@@ -441,29 +461,26 @@ function Log.Lines(lines, q)
 	end
 	if #t.places > shown and not q then lines[#lines + 1] = { indent = 1, text = Grey(L.AND_MORE:format(#t.places - shown)) } end
 	lines[#lines].gapAfter = true
-	-- Guild Life
-	local mates = Mates(t)
-	lines[#lines + 1] = { header = true, text = L.WEEKLOG_MATES,
-		tooltip = function(tt) tt:AddLine(L.WEEKLOG_MATES, 1, 0.82, 0); tt:AddLine(L.WEEKLOG_MATES_TIP, 1, 1, 1, true) end }
-	if #mates == 0 then lines[#lines + 1] = { indent = 1, text = Grey(L.WEEKLOG_NO_MATES) } end
-	for i = 1, math.min(Log.MATES_SHOWN, #mates) do
-		local m = mates[i]
-		if Want(m.name) then
-			local by = {}
-			for c in pairs(m.by) do by[#by + 1] = c end
-			table.sort(by)
-			lines[#lines + 1] = { indent = 1, text = m.name, right = Gold(Hours(m.s)) .. "  " .. Grey(table.concat(by, ", ")) }
-		end
-	end
-	lines[#lines].gapAfter = true
-	-- Share (the player's click alone)
-	if not q then
-		lines[#lines + 1] = { text = Gold(L.WEEKLOG_SHARE_GUILD), onClick = function() Log.Share("guild") end,
-			tooltip = function(tt) tt:AddLine(L.WEEKLOG_SHARE_GUILD, 1, 0.82, 0); tt:AddLine(Log.ShareText() or L.WEEKLOG_NOTHING, 1, 1, 1, true) end }
-		lines[#lines + 1] = { text = Gold(L.WEEKLOG_SHARE_NET), onClick = function() Log.Share("network") end,
-			tooltip = function(tt) tt:AddLine(L.WEEKLOG_SHARE_NET, 1, 0.82, 0); tt:AddLine(Log.ShareText() or L.WEEKLOG_NOTHING, 1, 1, 1, true) end }
-	end
+	if not noMates then Log.MatesLines(lines, q) end
+	-- (Share: both moved up beside Back, Log.ShareActions.)
 	return lines
+end
+
+-- The two shares, word buttons at the right end of the page's Back line (Views.RowActions): to the
+-- everyone chat in parchment, to guild chat in guild-chat green. Their tooltip, what would be sent.
+-- The player's click alone sends it.
+Log.SHARE_NET_COLOUR = { 0.91, 0.86, 0.75 } -- parchment / bone (e8dcc0, as the Crafters' main guild)
+Log.SHARE_GUILD_COLOUR = { 0.25, 1, 0.25 }  -- the game's guild chat green
+Log.SHARE_OR_COLOUR = { 0.6, 0.6, 0.6 }     -- the grey "or" between them
+function Log.ShareActions()
+	local what = Log.ShareText() or L.WEEKLOG_NOTHING
+	return {
+		{ text = L.WEEKLOG_SHARE_NET_SHORT, color = Log.SHARE_NET_COLOUR, tooltip = L.WEEKLOG_SHARE_NET .. "\n\n" .. what,
+			onClick = function() Log.Share("network") end },
+		{ text = L.WEEKLOG_SHARE_OR, color = Log.SHARE_OR_COLOUR, plain = true },
+		{ text = L.WEEKLOG_SHARE_GUILD_SHORT, color = Log.SHARE_GUILD_COLOUR, tooltip = L.WEEKLOG_SHARE_GUILD .. "\n\n" .. what,
+			onClick = function() Log.Share("guild") end },
+	}
 end
 
 ns.On("LOGIN", function()

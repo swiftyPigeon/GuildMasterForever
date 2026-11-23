@@ -6,4 +6,11 @@
 	<Binding name="GMF_TOGGLE" header="GUILDMASTERFOREVER" category="ADDONS">
 		GuildMasterForeverToggleBinding(keystate)
 	</Binding>
+	<!-- "Talk in the Guild Master Forever chat": the small chat open, the cursor in its box.
+	     Ctrl+Enter by default; also borrowed at run time while the player has no key for it and
+	     nothing else holds Ctrl+Enter (ChatDock.lua, Dock.SyncTalkKey). No header of its own: it
+	     falls under the one above (a header named twice is a Lua warning). -->
+	<Binding name="GMF_TALK" category="ADDONS" default="CTRL-ENTER">
+		GuildMasterForeverTalkBinding(keystate)
+	</Binding>
 </Bindings>

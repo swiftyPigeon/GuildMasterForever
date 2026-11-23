@@ -75,15 +75,43 @@ function ns.Cut(s, n)
 	return s:sub(1, n)
 end
 
+-- An item's info (name, link, quality, ...: GetItemInfo's returns) from an id, a link or a name,
+-- or nothing while the client has not loaded it. WoW: Forever has no global GetItemInfo (seen in
+-- game: every name came out "item N"), so C_Item first, the global for clients that still have it.
+-- Never errors.
+function ns.ItemInfo(item)
+	if item == nil then return nil end
+	local fns = { C_Item and C_Item.GetItemInfo or false, GetItemInfo or false }
+	for k = 1, 2 do
+		local fn = fns[k]
+		if type(fn) == "function" then
+			local res = { pcall(fn, item) }
+			if res[1] and res[2] ~= nil then return unpack(res, 2, 18) end
+		end
+	end
+	return nil
+end
+
 function ns.ShortName(name)
 	if not name then return nil end
 	return (name:gsub("%-.*$", ""))
 end
 
--- This realm's key, the same form the server uses in "Name-Realm" (no spaces or dashes).
-function ns.CurrentRealm()
+-- The realm the game reports, in the form the server uses in "Name-Realm" (no spaces or
+-- dashes), or "" when it reports none.
+function ns.GameRealm()
 	local realm = GetNormalizedRealmName and GetNormalizedRealmName()
-	if not realm or realm == "" then realm = ((GetRealmName and GetRealmName()) or ""):gsub("[%s%-]", "") end
+	if not realm or realm == "" then realm = (((GetRealmName and GetRealmName()) or ""):gsub("[%s%-]", "")) end
+	return type(realm) == "string" and realm or ""
+end
+
+-- This realm's key. 0.1.4: Forever's client (1.60.1, seen 2026-11-20) can report no realm at all
+-- (GetRealmName "", GetRealmID 0): then the one this character had when the game still said it
+-- (ns.RememberedRealm), so its identity ("Name-Realm"), the keeper's Workshop and the King stay
+-- known. "?" only when nothing is known.
+function ns.CurrentRealm()
+	local realm = ns.GameRealm()
+	if realm == "" and ns.RememberedRealm then realm = ns.RememberedRealm() or "" end
 	return realm ~= "" and realm or "?"
 end
 
@@ -180,6 +208,70 @@ end
 
 local SEED_BETA = "ClassicBetaPvP+ClassicBetaPvP2"
 local SEED = { ClassicBetaPvP = SEED_BETA, ClassicBetaPvP2 = SEED_BETA }
+
+-- 0.1.4: the realm this character had, for a client that reports none (ns.CurrentRealm).
+-- db.realmOf[character, lowercased, no realm] = realm, saved at each login the game said it
+-- (ns.RememberRealm); before that was ever saved, the character's line in db.myCharacters
+-- ("name surname-realm", lowercased), its realm given back its capitals from the realms we know
+-- (the seed, the groups learned). nil when neither knows.
+local function CharacterKeys()
+	local keys = {}
+	local name, second = nil, nil
+	if UnitFullName then name, second = UnitFullName("player") end
+	if type(name) ~= "string" or name == "" then name = UnitName and UnitName("player") end
+	if type(name) ~= "string" or name == "" then return keys end
+	if type(second) == "string" and second ~= "" then keys[#keys + 1] = (name .. " " .. second):lower() end
+	keys[#keys + 1] = name:lower()
+	return keys
+end
+
+local function KnownRealm(lower)
+	for realm in pairs(SEED) do
+		if realm:lower() == lower then return realm end
+	end
+	local links = ns.db and ns.db.links
+	if type(links) == "table" then
+		for realm, group in pairs(links) do
+			if type(realm) == "string" and realm:lower() == lower then return realm end
+			for r in tostring(group):gmatch("[^+]+") do
+				if r:lower() == lower then return r end
+			end
+		end
+	end
+	return nil
+end
+
+function ns.RememberedRealm()
+	local db = ns.db
+	if type(db) ~= "table" then return nil end
+	local keys = CharacterKeys()
+	if type(db.realmOf) == "table" then
+		for _, k in ipairs(keys) do
+			local r = db.realmOf[k]
+			if type(r) == "string" and r ~= "" then return r end
+		end
+	end
+	if type(db.myCharacters) == "table" then
+		for _, k in ipairs(keys) do
+			for entry in pairs(db.myCharacters) do
+				local n, r = tostring(entry):match("^(.-)%-([^%-]+)$")
+				if n == k then
+					local known = KnownRealm(r)
+					if known then return known end
+				end
+			end
+		end
+	end
+	return nil
+end
+
+-- At login: the realm the game reports, kept for this character (nothing when it reports none).
+function ns.RememberRealm(me)
+	local realm = ns.GameRealm()
+	if realm == "" or type(ns.db) ~= "table" or type(me) ~= "string" then return end
+	ns.db.realmOf = type(ns.db.realmOf) == "table" and ns.db.realmOf or {}
+	ns.db.realmOf[ns.ShortName(me):lower()] = realm
+end
 
 -- A realm name in the form the server uses in "Name-Realm", or nil when unusable.
 local function CleanRealm(realm)
@@ -1995,6 +2087,9 @@ ns.RegisterEvent("PLAYER_LOGIN", function()
 	end
 	ns.me = ns.PlayerName()
 	ns.Log("login as %s", ns.me)
+	-- 0.1.4: the realm kept while the game says it, and said when it was not (ns.CurrentRealm).
+	ns.RememberRealm(ns.me)
+	if ns.GameRealm() == "" then ns.Log("the game reports no realm: using %s", tostring(ns.realm)) end
 	ns.Fire("LOGIN")
 end)
 

@@ -28,6 +28,7 @@ Codec.lua
 Sign.lua
 Zones.lua
 Who.lua
+Finder.lua
 Data.lua
 Roster.lua
 Comm.lua
@@ -77,5 +78,6 @@ GuildFrame.lua
 Borders.lua
 Nameplates.lua
 ChatWindow.lua
+ChatDock.lua
 Mentions.lua
 Party.lua

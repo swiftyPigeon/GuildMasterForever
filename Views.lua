@@ -200,8 +200,15 @@ local function Row(content, i)
 		cell:Hide()
 		r.cells[c] = cell
 	end
-	r:SetScript("OnClick", function(self)
+	-- 0.1.4: a right-click too, for the lines that take one (line.onRightClick, the Nearby tab's menu);
+	-- on any other line it does nothing, as before.
+	r:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+	r:SetScript("OnClick", function(self, button)
 		if not self.line then return end
+		if button == "RightButton" then
+			if self.line.onRightClick then ns.SafeCall("view right click", self.line.onRightClick, self) end
+			return
+		end
 		-- HD: the person opened stays lit, like the roster's selected member.
 		if content.style == "hd" and self.line.key then ns.SafeCall("view select", Views.Select, content, self.line.key) end
 		-- Where the row was clicked, for the redraw its click causes (UI.lua keeps it in place):
@@ -280,12 +287,21 @@ local function ItemButton(r, k)
 		if it and not it.gone and line and line.onItem and not (IsShiftKeyDown and IsShiftKeyDown()) then
 			return ns.SafeCall("view item", line.onItem, it)
 		end
+		-- A line that takes the shift-click itself (a crafter's recipe into the small chat, 2026-11-13):
+		-- done when it says so; else the link into the game's chat, below.
+		if it and line and line.onShiftItem and IsShiftKeyDown and IsShiftKeyDown() then
+			local ok, done = pcall(line.onShiftItem, it) -- (ns.SafeCall would give "ran", not its answer)
+			if not ok and ns.CaptureError then ns.CaptureError("view item shift", done) end
+			if ok and done == true then return end
+		end
 		-- Shift-click: the link into the chat box, as in a bag (not with the gamepad UI: its
 		-- chat box would be blocked, see Dialog.lua). ChatEdit_InsertLink only adds it to a box the
 		-- player opened; it never opens one (what tainted the chat box was opening it: Board.Whisper).
 		if not it or not IsShiftKeyDown or not IsShiftKeyDown() or ns.GamepadUI() or not ChatEdit_InsertLink then return end
 		local link = it.link
-		if not link and GetItemInfo then local okInfo, _, l = pcall(GetItemInfo, it.id); if okInfo then link = l end end
+		-- (2026-11-13: Forever has no global GetItemInfo; C_Item first.)
+		local info = (C_Item and C_Item.GetItemInfo) or GetItemInfo
+		if not link and info then local okInfo, _, l = pcall(info, it.id); if okInfo then link = l end end
 		if link then pcall(ChatEdit_InsertLink, link) end
 	end)
 	b:SetScript("OnEnter", function(self)
@@ -298,6 +314,8 @@ local function ItemButton(r, k)
 		if not ok then GameTooltip:AddLine("#" .. tostring(it.id), 1, 1, 1) end
 		if (it.n or 0) > 1 then GameTooltip:AddLine("x" .. it.n, 0.8, 0.8, 0.8) end
 		if it.gone then GameTooltip:AddLine(L.BANK_GONE_SLOT, 1, 0.4, 0.4, true) end
+		-- More lines from the page that drew it (a crafter's recipe: its materials, Crafters.AddReagents).
+		if type(it.tip) == "function" then ns.SafeCall("item tooltip", it.tip, GameTooltip, it) end
 		local row = self.GetParent and self:GetParent()
 		local hint = not it.gone and row and row.line and row.line.itemHint
 		if hint then GameTooltip:AddLine(hint, 0.6, 1, 0.6, true) end
@@ -533,6 +551,7 @@ end
 
 -- The row's word buttons (line.actions), right to left from its end; hides the ones not used.
 -- Returns what the right text sits left of: the last button, or the row itself (its end).
+local ACTION_GOLD = { 1, 0.82, 0 }
 function Views.RowActions(r, actions, rowH)
 	r.acts = r.acts or {}
 	for _, b in ipairs(r.acts) do b:Hide() end
@@ -554,11 +573,13 @@ function Views.RowActions(r, actions, rowH)
 					GameTooltip:Show()
 				end
 			end)
-			b:SetScript("OnLeave", function(self) self.label:SetTextColor(1, 0.82, 0) GameTooltip:Hide() end)
+			b:SetScript("OnLeave", function(self) local c = self.color; self.label:SetTextColor(c[1], c[2], c[3]) GameTooltip:Hide() end)
 			r.acts[k] = b
 		end
 		b.label:SetText(a.text or "")
-		b.label:SetTextColor(1, 0.82, 0)
+		b.color = type(a.color) == "table" and a.color or ACTION_GOLD -- (0.1.4: a.color = { r, g, b }, else gold)
+		b.label:SetTextColor(b.color[1], b.color[2], b.color[3])
+		b:EnableMouse(not a.plain) -- (0.1.4: a.plain, a word between buttons: no click, no hover)
 		b.tip = a.tooltip
 		b:SetSize(math.ceil(b.label:GetStringWidth() or 30) + 8, rowH)
 		b:SetScript("OnClick", function()
@@ -682,7 +703,7 @@ function Views.Render(content, lines, layout)
 		if not line.items then for k = 1, #(r.items or {}) do r.items[k]:Hide() end end
 		if line.cols or line.items then Views.RowActions(r, nil, rowH) end
 		r:SetHeight(height)
-		r:EnableMouse(line.onClick ~= nil or line.tooltip ~= nil or r.cut == true)
+		r:EnableMouse(line.onClick ~= nil or line.onRightClick ~= nil or line.tooltip ~= nil or r.cut == true)
 		if hd then
 			r.stripe:SetShown(line.cols ~= nil or line.onClick ~= nil)
 			if line.key and line.key == content.selectedKey then r:LockHighlight() else r:UnlockHighlight() end
@@ -1149,11 +1170,15 @@ end
 
 -- The guilds with room (1000 members is the game's cap), most free slots first; `min`: at least
 -- that many free. Fresh reports only: an old one's size may be gone.
-function Views.OpenGuilds(s, min)
+-- keepHouse (0.1.4, the user): our own guilds (home and alt) stay listed when no member with the add-on is online,
+-- with the size of their last report (up to Data.KEEP), marked stale. Recruit's Join screens leave
+-- it off: nobody there could answer a whisper.
+function Views.OpenGuilds(s, min, keepHouse)
 	local open = {}
 	for _, e in ipairs(s.guilds) do
 		local free = 1000 - (e.g.total or 0)
-		if e.fresh and free > 0 and free >= (min or 1) then open[#open + 1] = { name = e.name, free = free, e = e } end
+		local listed = e.fresh or (keepHouse and ns.IsHouseGuild(e.name))
+		if listed and free > 0 and free >= (min or 1) then open[#open + 1] = { name = e.name, free = free, e = e, stale = not e.fresh or nil } end
 	end
 	table.sort(open, function(a, b)
 		if a.free ~= b.free then return a.free > b.free end
@@ -1226,7 +1251,7 @@ local function RecruitQuery(q)
 end
 
 local function RecruitingLines(lines, s, min)
-	local open = Views.OpenGuilds(s, min)
+	local open = Views.OpenGuilds(s, min, true)
 	lines[#lines + 1] = { header = true, text = L.RECRUITING, right = Grey(L.SEARCH_RECRUITING_COUNT:format(#open)) }
 	local gates = ns.Acts and ns.Acts.Gates and ns.Acts.Gates()
 	local first
@@ -1235,7 +1260,7 @@ local function RecruitingLines(lines, s, min)
 	end
 	if first then table.insert(open, 1, table.remove(open, first)) end
 	for _, o in ipairs(open) do
-		lines[#lines + 1] = GuildLink(o.name, L.FREE_SLOTS:format(ns.FormatNumber(o.free)),
+		lines[#lines + 1] = GuildLink(o.name, L.FREE_SLOTS:format(ns.FormatNumber(o.free)) .. (o.stale and Grey("  " .. ns.Ago(o.e.g.t)) or ""),
 			(gates and o.name == gates.guild and CROWN or "") .. Views.DisputeMark(o.e.g))
 	end
 	if #open == 0 then lines[#lines + 1] = { indent = 1, text = Grey(L.ALL_FULL) } end
@@ -1300,6 +1325,7 @@ local function PlayersFound(e, q, own, swept)
 		Add({ name = o.name, realm = g.realm, label = OfficerTitle(e.name), captain = true, level = o.level, class = o.class, zone = o.zone, online = o.online, days = o.days })
 	end
 	for _, p in ipairs(g.top or {}) do Add({ name = p.name, realm = g.realm, level = p.level, class = p.class }) end
+	for _, p in ipairs(g.capped or {}) do Add({ name = p.name, realm = g.realm, level = p.level, class = p.class }) end
 	if e.name == own then
 		for _, m in ipairs(ns.Roster.online or {}) do Add({ name = m.name, label = m.rank, level = m.level, class = m.class, zone = m.zone, online = true }) end
 	else
@@ -2044,10 +2070,54 @@ local function RealmLines(s, q)
 		return lines
 	end
 
-	local racers = {}
+	-- 0.1.4: Max level (everyone at the cap, folded, by name) apart from the Level race (the
+	-- top five below the cap from each guild). A guild on an older version sends no capped list:
+	-- its capped players come out of its top five.
+	local maxLevel = ns.Roster.MaxLevel()
+	local racers, capped, cappedTotal = {}, {}, 0
 	for _, e in ipairs(s.guilds) do
 		if e.fresh then
-			for _, p in ipairs(e.g.top or {}) do racers[#racers + 1] = { name = p.name, realm = e.g.realm, level = p.level, class = p.class, guild = e.name } end
+			local g = e.g
+			for _, p in ipairs(g.top or {}) do
+				local row = { name = p.name, realm = g.realm, level = p.level, class = p.class, guild = e.name }
+				if (p.level or 0) < maxLevel then racers[#racers + 1] = row
+				elseif not g.capped then capped[#capped + 1] = row; cappedTotal = cappedTotal + 1 end
+			end
+			if g.capped then
+				for _, p in ipairs(g.capped) do capped[#capped + 1] = { name = p.name, realm = g.realm, level = p.level, class = p.class, guild = e.name } end
+				cappedTotal = cappedTotal + math.max(g.cappedCount or 0, #g.capped)
+			end
+		end
+	end
+	table.sort(capped, function(a, b)
+		if a.name ~= b.name then return a.name < b.name end
+		return a.guild < b.guild
+	end)
+	lines[#lines + 1] = {
+		header = true, text = (Views.capOpen and "[-] " or "[+] ") .. L.MAX_LEVEL, right = Grey(tostring(cappedTotal)),
+		onClick = function() Views.capOpen = not Views.capOpen; ns.UI.Refresh() end,
+		tooltip = function(tt)
+			tt:AddLine(L.MAX_LEVEL, 1, 0.82, 0)
+			tt:AddLine(L.MAX_LEVEL_TIP:format(maxLevel), 1, 1, 1, true)
+			tt:AddLine(L.CLICK_EXPAND, 0.6, 0.6, 0.6, true)
+		end,
+	}
+	if Views.capOpen then
+		if #capped == 0 then lines[#lines + 1] = { text = Grey(L.NONE_REPORTED) } end
+		local shownCapped = math.min(#capped, Views.capShown)
+		for i = 1, shownCapped do
+			local p = capped[i]
+			lines[#lines + 1] = {
+				key = "cap:" .. p.name, indent = 1,
+				text = ClassColored(p.name, p.class and ns.CLASS_FILES[p.class]) .. "  " .. Grey("<" .. Plain(p.guild) .. ">"),
+				onClick = function() ns.UI.ShowPerson({ name = p.name, realm = p.realm, class = p.class, level = p.level, guild = p.guild }) end,
+			}
+		end
+		if #capped > shownCapped then
+			lines[#lines + 1] = { indent = 1, text = Grey(L.SHOW_MORE:format(math.min(Views.RACE_PAGE, #capped - shownCapped), shownCapped, #capped)),
+				onClick = function() Views.capShown = Views.capShown + Views.RACE_PAGE; ns.UI.Refresh() end }
+		elseif cappedTotal > #capped then
+			lines[#lines + 1] = { indent = 1, text = Grey(L.MAX_LEVEL_UNLISTED:format(cappedTotal - #capped)) }
 		end
 	end
 	table.sort(racers, function(a, b)
@@ -2074,7 +2144,7 @@ local function RealmLines(s, q)
 			onClick = function() Views.raceShown = Views.raceShown + Views.RACE_PAGE; ns.Fire("DATA_CHANGED") end }
 	end
 
-	local open = Views.OpenGuilds(s)
+	local open = Views.OpenGuilds(s, nil, true)
 	-- (1.1.2's review: free slots are 1000 less the size of each guild's last report.)
 	lines[#lines + 1] = { header = true, text = L.RECRUITING, tooltip = function(tt)
 		tt:AddLine(L.RECRUITING, 1, 0.82, 0)
@@ -2103,11 +2173,14 @@ local function RealmLines(s, q)
 		-- (Its census mark too, 1.1: the gates open on its size, request #30.)
 		local mark, d = Views.DisputeMark(open[i].e.g)
 		lines[#lines + 1] = {
-			text = mark .. Green("<" .. name .. ">"), right = L.FREE_SLOTS:format(ns.FormatNumber(open[i].free)),
+			text = mark .. (open[i].stale and Grey("<" .. name .. ">") or Green("<" .. name .. ">")),
+			right = open[i].stale and Grey(L.FREE_SLOTS:format(ns.FormatNumber(open[i].free)) .. "  " .. ns.Ago(open[i].e.g.t))
+				or L.FREE_SLOTS:format(ns.FormatNumber(open[i].free)),
 			-- The leader and their helpers open a guild's gates from here.
 			onClick = commands and function() ns.Acts.GatesClick(name) end or nil,
 			tooltip = function(tt)
 				tt:AddLine("<" .. name .. ">", 0.25, 1, 0.25)
+				if open[i].stale then tt:AddLine(L.RECRUIT_STALE_TIP:format(ns.Ago(open[i].e.g.t)), 0.6, 0.6, 0.6, true) end
 				if commands then
 					local closing = gates and gates.guild == name
 					tt:AddLine(closing and (ns.Acts.CanClose() and L.GATES_CLOSE_TIP or L.GATES_ONLY_OPENER) or L.GATES_CLICK_TIP, 1, 1, 1, true)
@@ -2296,6 +2369,7 @@ end
 Views.RACE_MAX, Views.RACE_PAGE = 100, 25 -- the level race: its top 100, 25 at a time
 Views.RECRUIT_SHOWN = 5 -- guilds with room shown in the Realm's Recruiting, the rest on a click (1.1)
 Views.raceShown = Views.RACE_PAGE
+Views.capOpen, Views.capShown = false, Views.RACE_PAGE -- Max level: folded until clicked, then 25 at a time
 Views.INSPECT_ROWS = 200 -- Guildmates nearby listed on the Tabards tab page
 
 -- 1.1 (request #28): the gear an officer's click kept (Inspect.InspectGear), newest first, the
@@ -2510,7 +2584,16 @@ function Views.RecruitLines()
 	-- first (two answers agree on them), then the most free slots of the guilds /who found; a
 	-- click asks one of that guild's officers /who found online.
 	local route = R.Route()
-	if route and #R.RouteOrder(route) > 0 then
+	-- 0.1.4 (the user's call: each guild was listed twice): a guild /who found online is listed
+	-- once, below with its members (Recruit.Guilds already carries the route's gates and free
+	-- slots, in the route's order); the route lists only the ones nobody found online.
+	local online = {}
+	for _, g in ipairs(guilds) do online[g.name] = true end
+	local routeNames = {}
+	for _, name in ipairs(route and R.RouteOrder(route) or {}) do
+		if not online[name] then routeNames[#routeNames + 1] = name end
+	end
+	if #routeNames > 0 then
 		lines[#lines + 1] = {
 			header = true, text = L.RECRUIT_ROUTE_TITLE,
 			tooltip = function(tt)
@@ -2518,7 +2601,7 @@ function Views.RecruitLines()
 				tt:AddLine(L.RECRUIT_ROUTE_TIP:format(ns.DisplayName(route.from) or "?"), 1, 1, 1, true)
 			end,
 		}
-		for _, name in ipairs(R.RouteOrder(route)) do
+		for _, name in ipairs(routeNames) do
 			local e = route.byName[name]
 			local gates = name == route.gates
 			lines[#lines + 1] = {
@@ -2810,6 +2893,12 @@ local BUILD = {
 		lines = lines or {}
 		if searched then Searched(lines, "treasury", "TREASURY") end
 		return lines, title, text
+	end,
+	-- 0.1.4: the Nearby tab (Finder.lua), anyone /who finds, for grouping.
+	finder = function()
+		if not (ns.Finder and ns.Finder.Build) then return { { text = Grey(L.RESTART_NEEDED) } }, nil, nil end
+		local lines, title, text = ns.Finder.Build()
+		return lines or {}, title, text
 	end,
 	workshop = function()
 		if not (ns.Workshop and ns.Workshop.Build) then return {}, nil, nil end

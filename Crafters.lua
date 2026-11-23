@@ -66,16 +66,18 @@ local askTimes = {}     -- our asks' times (the last 10 minutes)
 local askCounter = 0
 local answered = {}     -- [asker] = when we last answered them
 local answerTimes = {}  -- our answers' times (the last minute)
-local listSent = {}     -- [player] = when we last sent them a list
+local listSent = {}     -- [player .. "~" .. profession] = when we last sent them that list (per profession)
 local listTimes = {}
 local listJobs = {}     -- { { to, key, parts, i, stalls } }: our lists going out, a part each LIST_PACE
 local listPumping = false
 local busyTimes = {}    -- our "busy" answers' times (the last minute)
 local lists = {}        -- [crafter .. "~" .. key] = { parts = {}, n, t, recipes }: lists asked for
 local asked = {}        -- [crafter .. "~" .. key] = when we asked
+local busyRetried = {}  -- [crafter .. "~" .. key] = true: asked again by itself after a "busy" (once)
 local lastListing, lastListingText = -math.huge, nil
-local open = {}         -- [crafter] = true: shown opened on the page
-local mineOpen = false  -- 1.3.0: our own listing shown opened on the page
+-- What shows opened, per view: the Realm tab's page (main) and the small Crafters window (dock,
+-- ChatDock.lua), each its own: [crafter .. "~" .. key] = true, and .mine (our own listing, 1.3.0).
+local openBy = { main = {}, dock = {} }
 local pendingRead       -- a profession read waiting for its data
 -- 1.3.0: what the recipe lists did this session, for /gmf bug (a list that never comes, traced).
 local listStats = { asked = 0, askedOfUs = 0, refused = 0, sent = 0, stalled = 0, parts = 0, late = 0, busy = 0 }
@@ -92,6 +94,12 @@ local function Num(s, max)
 	local n = tonumber(s)
 	if not n or n ~= math.floor(n) or n < 0 or n > max then return nil end
 	return n
+end
+
+-- Both views drawn again: the window's page and the small Crafters window (ChatDock.lua).
+function Crafters.Redraw()
+	if ns.UI and ns.UI.Refresh then ns.UI.Refresh() end
+	if ns.ChatDock and ns.ChatDock.RedrawCrafters then ns.SafeCall("crafters window", ns.ChatDock.RedrawCrafters) end
 end
 
 local function Changed()
@@ -139,6 +147,109 @@ function Crafters.Mine() return Saved("crafterData") end
 
 local function Id(link, kind) return type(link) == "string" and tonumber(link:match(kind .. ":(%d+)")) or nil end
 
+---------------------------------------------------------------------------
+-- A recipe's materials (the user, 2026-11-13: the board showed what a recipe makes, never what it
+-- takes). Read from the game, never sent: our own as we read a profession, anyone else's by its
+-- recipe id where the client tells (Forever's C_TradeSkillUI.GetRecipeSchematic, as ForeverChef
+-- reads Cooking). Kept per account: ns.db.crafterReagents[recipe id] = { { i = item, n = count } }.
+---------------------------------------------------------------------------
+
+Crafters.REAGENTS_MAX = 8          -- materials a recipe keeps, at most
+Crafters.REAGENTS_RETRY = 30       -- a recipe the game told nothing of is asked again this much later
+
+local reagentTried = {} -- [recipe id] = when we last asked the game and got nothing
+local namesWaiting = {} -- [item id] = true: a material shown by number, its name on its way
+local namesOwner        -- the item button whose tooltip showed it
+
+local function ReagentStore()
+	ns.db.crafterReagents = type(ns.db.crafterReagents) == "table" and ns.db.crafterReagents or {}
+	return ns.db.crafterReagents
+end
+
+local function ReagentItem(reagent)
+	if type(reagent) ~= "table" then return nil end
+	local id = reagent.itemID or (type(reagent.item) == "table" and reagent.item.itemID)
+	if not id and reagent.itemLink then id = Id(reagent.itemLink, "item") end
+	return tonumber(id)
+end
+
+-- The game's materials for a recipe id, required slots only, one item per slot (a slot may list
+-- other qualities of the same material): { { i, n } }, or nil.
+local function ReadSchematic(recipe)
+	local T = C_TradeSkillUI
+	if not recipe or not T or type(T.GetRecipeSchematic) ~= "function" then return nil end
+	local ok, s = pcall(T.GetRecipeSchematic, recipe, false)
+	if not ok or type(s) ~= "table" or type(s.reagentSlotSchematics) ~= "table" then return nil end
+	local out = {}
+	for _, slot in ipairs(s.reagentSlotSchematics) do
+		if type(slot) == "table" and slot.required ~= false and type(slot.reagents) == "table" then
+			local id = ReagentItem(slot.reagents[1])
+			local n = math.floor(tonumber(slot.quantityRequired) or 1)
+			if id and n > 0 and #out < Crafters.REAGENTS_MAX then out[#out + 1] = { i = id, n = n } end
+		end
+	end
+	return #out > 0 and out or nil
+end
+
+-- Classic's trade skill (or craft) window: the materials of its line `i`.
+local function ReadClassicReagents(craft, i)
+	local num = craft and GetCraftNumReagents or GetTradeSkillNumReagents
+	local info = craft and GetCraftReagentInfo or GetTradeSkillReagentInfo
+	local link = craft and GetCraftReagentItemLink or GetTradeSkillReagentItemLink
+	if type(num) ~= "function" or type(link) ~= "function" then return nil end
+	local okn, count = pcall(num, i)
+	local out = {}
+	for j = 1, math.min(okn and tonumber(count) or 0, Crafters.REAGENTS_MAX) do
+		local okl, l = pcall(link, i, j)
+		local id = okl and Id(l, "item") or nil
+		local n = 1
+		if type(info) == "function" then
+			local oki, _, _, c = pcall(info, i, j)
+			n = oki and math.floor(tonumber(c) or 1) or 1
+		end
+		if id and n > 0 then out[#out + 1] = { i = id, n = n } end
+	end
+	return #out > 0 and out or nil
+end
+
+-- A stored list, checked (saved data may be anything).
+local function GoodReagents(g)
+	if type(g) ~= "table" or #g == 0 then return nil end
+	for _, m in ipairs(g) do
+		if type(m) ~= "table" or not tonumber(m.i) or not tonumber(m.n) then return nil end
+	end
+	return g
+end
+
+-- A recipe's materials: { { i, n } }, or nil where neither we nor the game know them.
+function Crafters.ReagentsOf(recipe)
+	recipe = tonumber(recipe)
+	if not recipe then return nil end
+	local store = ReagentStore()
+	local g = GoodReagents(store[recipe])
+	if g then return g end
+	store[recipe] = nil
+	local now = ns.Now()
+	if now - (reagentTried[recipe] or -math.huge) < Crafters.REAGENTS_RETRY then return nil end
+	g = ReadSchematic(recipe)
+	if g then store[recipe] = g else reagentTried[recipe] = now end
+	return g
+end
+
+local function ItemIcon(id)
+	local fn = (C_Item and C_Item.GetItemIconByID) or GetItemIcon
+	if type(fn) ~= "function" then return nil end
+	local ok, icon = pcall(fn, id)
+	return ok and icon or nil
+end
+
+local function ItemCount(id)
+	local fn = (C_Item and C_Item.GetItemCount) or GetItemCount
+	if type(fn) ~= "function" then return nil end
+	local ok, n = pcall(fn, id, true) -- (the bank too)
+	return ok and tonumber(n) or nil
+end
+
 -- Someone else's profession shown in the window (a link, a guild's list, an NPC's): not ours.
 local function External()
 	local T = C_TradeSkillUI
@@ -184,7 +295,7 @@ local function ReadModern()
 				local oko, out = pcall(T.GetRecipeOutputItemData, id)
 				if oko and type(out) == "table" then item = out.itemID end
 			end
-			recipes[#recipes + 1] = { r = id, i = item, n = info.name }
+			recipes[#recipes + 1] = { r = id, i = item, n = info.name, g = ReadSchematic(id) }
 		end
 	end
 	local skill = child or base
@@ -209,7 +320,7 @@ local function ReadClassic(craft)
 		if rname and kind ~= "header" and kind ~= "subheader" then
 			local link = type(itemLink) == "function" and itemLink(i) or nil
 			local rlink = type(recipeLink) == "function" and recipeLink(i) or nil
-			recipes[#recipes + 1] = { r = Id(rlink, "enchant") or Id(link, "enchant"), i = Id(link, "item"), n = rname }
+			recipes[#recipes + 1] = { r = Id(rlink, "enchant") or Id(link, "enchant"), i = Id(link, "item"), n = rname, g = ReadClassicReagents(craft, i) }
 		end
 	end
 	return { key = Clean(name, 24), name = name, rank = rank, max = max, recipes = recipes }
@@ -224,6 +335,13 @@ function Crafters.Read(craft)
 	p.key = Clean(p.key, 24)
 	if p.name == "" or p.key == "" then return nil end
 	p.rank, p.max, p.t = math.floor(tonumber(p.rank) or 0), math.floor(tonumber(p.max) or 0), ns.Now()
+	-- Their materials, kept by recipe id (for every character of this account, and for the same
+	-- recipe on anyone's list); not in the listing, which carries ids only.
+	local store = ReagentStore()
+	for _, r in ipairs(p.recipes) do
+		if r.r and r.g then store[r.r] = r.g end
+		r.g = nil
+	end
 	return p
 end
 
@@ -529,10 +647,16 @@ end
 -- "Who can make this?": our ask, the crafters' answers
 ---------------------------------------------------------------------------
 
+-- (2026-11-13, seen in game: Forever has no global GetItemInfo, so every name came out "item N".
+-- C_Item first, as Treasury.lua does; the global for clients that still have it.)
 local function ItemName(id)
-	if GetItemInfo then
-		local ok, name = pcall(GetItemInfo, id)
-		if ok and type(name) == "string" then return name end
+	local fns = { C_Item and C_Item.GetItemNameByID or false, C_Item and C_Item.GetItemInfo or false, GetItemInfo or false }
+	for k = 1, 3 do
+		local fn = fns[k]
+		if type(fn) == "function" then
+			local ok, name = pcall(fn, id)
+			if ok and type(name) == "string" and name ~= "" then return name end
+		end
 	end
 	return L.CRAFTER_ITEM_N:format(id)
 end
@@ -553,7 +677,8 @@ function Crafters.Ask(what)
 	myAsk = { id = askId, t = now, item = id, label = id and ItemName(id) or words, answers = {}, count = 0 }
 	ns.Comm.Send("CHANNEL", id and ("WQ~%s~i~%d"):format(askId, id) or ("WQ~%s~t~%s"):format(askId, ns.Fold(words)), "crafterask", true)
 	ns.Print(L.CRAFTER_ASKED:format(myAsk.label))
-	ns.Views.ShowPage("crafters")
+	-- (Asked from the small Crafters window: the answers show there; the window's page is left as it is.)
+	if not (ns.ChatDock and ns.ChatDock.CraftersShown and ns.ChatDock.CraftersShown()) then ns.Views.ShowPage("crafters") end
 	Changed()
 	return myAsk
 end
@@ -647,6 +772,18 @@ function Crafters.AskList(crafter, key)
 	listStats.asked = listStats.asked + 1
 	ns.Log("crafters: asked %s for their %s recipes", crafter, key)
 	ns.Comm.Whisper(crafter, "WR~" .. key, "crafterlistask " .. k)
+	-- 3b (2026-11-13, seen in game): a crafter still on 1.3.3 answers each asker once per 2 minutes
+	-- whatever the profession, in silence: asked again by itself once, just after that window.
+	local mine = lists[k]
+	if not busyRetried[k] then
+		Crafters.after(Crafters.LIST_SAME + 5, "crafter list retry after silence", function()
+			if lists[k] == mine and not mine.n and not mine.busy and not busyRetried[k] then
+				busyRetried[k] = true
+				asked[k] = nil
+				Crafters.AskList(crafter, key)
+			end
+		end)
+	end
 	Changed()
 	return true
 end
@@ -691,16 +828,21 @@ function Crafters.HandleListAsk(dist, sender, text)
 	end
 	sender = ns.FullName(sender)
 	local now = ns.Now()
-	if now - (listSent[sender] or -math.huge) < Crafters.LIST_SAME or Recent(listTimes, 60) >= Crafters.LISTS_PER_MIN then return end
-	if #listJobs >= Crafters.LIST_JOBS then
-		-- Busy with other players' lists: they are told so (and may ask again in a minute).
+	-- Once per asker AND profession each LIST_SAME (it was once per asker, so a second profession
+	-- asked within 2 min got silence and hung on "asking..."). The same list again that soon:
+	-- silence (the asker's own wait stops it anyway).
+	local sentKey = sender .. "~" .. key
+	if now - (listSent[sentKey] or -math.huge) < Crafters.LIST_SAME then return end
+	-- Busy (lists going out, or LISTS_PER_MIN sent this minute): they are told so, not left waiting
+	-- (the minute's cap was silence too); their add-on asks again by itself once.
+	if #listJobs >= Crafters.LIST_JOBS or Recent(listTimes, 60) >= Crafters.LISTS_PER_MIN then
 		if Recent(busyTimes, 60) < Crafters.BUSY_PER_MIN then
 			busyTimes[#busyTimes + 1] = now
 			ns.Comm.Whisper(sender, ("WL~%s~0/0~"):format(key), "crafterbusy " .. sender)
 		end
 		return
 	end
-	listSent[sender] = now
+	listSent[sentKey] = now
 	listTimes[#listTimes + 1] = now
 	-- Parts of LIST_BYTES of entries each (a message holds 255 bytes), LIST_PARTS at most.
 	local parts, cur = {}, {}
@@ -739,13 +881,26 @@ function Crafters.HandleList(dist, sender, text)
 	end
 	if part == 0 and parts == 0 and not l.n then
 		listStats.busy = listStats.busy + 1
-		-- They are busy sending other players' lists: asked again, on a click, BUSY_WAIT later.
+		-- They are busy sending other players' lists: asked again by itself once, BUSY_WAIT (and a
+		-- few random seconds) later; after that, on a click, BUSY_WAIT later.
+		local k = sender .. "~" .. key
 		l.busy = now
-		asked[sender .. "~" .. key] = now - Crafters.LIST_SAME + Crafters.BUSY_WAIT
+		asked[k] = now - Crafters.LIST_SAME + Crafters.BUSY_WAIT
+		if not busyRetried[k] then
+			busyRetried[k] = true
+			Crafters.after(Crafters.BUSY_WAIT + Crafters.random() * 10, "crafter list retry", function()
+				local cur = lists[k]
+				if cur and cur.busy and not cur.n then
+					asked[k] = nil
+					Crafters.AskList(sender, key)
+				end
+			end)
+		end
 		return Changed()
 	end
 	if part < 1 or part > parts then return end
 	l.parts[part] = Recipes(list, Crafters.LIST_PER_MSG)
+	busyRetried[sender .. "~" .. key] = nil -- (it came: a later "busy" may be retried again)
 	listStats.parts = listStats.parts + 1
 	l.n, l.last, l.busy = parts, now, nil
 	Changed()
@@ -794,18 +949,166 @@ function Crafters.Link()
 	}
 end
 
+-- Under an item's own tooltip on the page (Views' ItemButton, it.tip): the materials of the recipe
+-- that makes it, with how many we hold (bags and bank). An item not yet in the client's cache is
+-- named by number and asked for, so the next hover names it.
+function Crafters.AddReagents(tt, it)
+	if not it or not it.recipe then return end
+	local g = Crafters.ReagentsOf(it.recipe)
+	tt:AddLine(" ")
+	if not g then
+		tt:AddLine(L.CRAFTER_MATS_UNKNOWN, 0.6, 0.6, 0.6, true)
+		return
+	end
+	tt:AddLine(L.CRAFTER_MATS, 1, 0.82, 0)
+	for _, m in ipairs(g) do
+		local id, need = tonumber(m.i), tonumber(m.n)
+		if C_Item and type(C_Item.RequestLoadItemDataByID) == "function" then pcall(C_Item.RequestLoadItemDataByID, id) end
+		local icon = ItemIcon(id)
+		local have = ItemCount(id)
+		local left = (icon and ("|T%s:14:14|t "):format(tostring(icon)) or "") .. ItemName(id)
+		local right = have and L.CRAFTER_MATS_HAVE:format(have, need) or ("x%d"):format(need)
+		local enough = have and have >= need
+		tt:AddDoubleLine(left, right, 1, 1, 1, enough and 0.25 or 0.8, enough and 1 or 0.8, enough and 0.25 or 0.8)
+		if left:find(L.CRAFTER_ITEM_N:format(id), 1, true) then
+			-- (Named by number: the client hasn't the item yet. Redrawn when it comes, below.)
+			namesWaiting[id] = true
+			namesOwner = tt.GetOwner and tt:GetOwner() or nil
+		end
+	end
+end
+
+-- An item the tooltip named by number has come (the game's GET_ITEM_INFO_RECEIVED): the tooltip,
+-- still over the same recipe, is drawn again, once for every item that came together.
+local redrawSoon = false
+function Crafters.ItemInfoReceived(itemID)
+	itemID = tonumber(itemID)
+	if not itemID or not namesWaiting[itemID] then return end
+	namesWaiting[itemID] = nil
+	if redrawSoon then return end
+	redrawSoon = true
+	Crafters.after(0.1, "crafter materials names", function()
+		redrawSoon = false
+		local owner = namesOwner
+		if not owner or not GameTooltip:IsShown() or (GameTooltip.GetOwner and GameTooltip:GetOwner() ~= owner) then return end
+		if not (owner.item and owner.item.tip == Crafters.AddReagents) then return end
+		local onEnter = owner.GetScript and owner:GetScript("OnEnter")
+		if onEnter then onEnter(owner) end
+	end)
+end
+pcall(ns.RegisterEvent, "GET_ITEM_INFO_RECEIVED", function(itemID) Crafters.ItemInfoReceived(itemID) end)
+
 local function RecipeItems(recipes)
 	local items, others = {}, 0
 	for _, r in ipairs(recipes) do
-		if r.i then items[#items + 1] = { id = r.i } else others = others + 1 end
+		if r.i then items[#items + 1] = { id = r.i, recipe = r.r, tip = Crafters.AddReagents } else others = others + 1 end
 	end
 	return items, others
 end
 
+---------------------------------------------------------------------------
+-- Asking a crafter for one recipe (the user, 2026-11-13): a click on a recipe's item under a crafter
+-- opens the add-on's whisper window to them, written: the item's link, the recipe's link and its
+-- materials. The player reads, edits and sends it themselves (UI.WhisperText); nothing goes on its own.
+---------------------------------------------------------------------------
+
+Crafters.WHISPER_MAX = 255 -- a whisper's bytes; a link is never cut (the server drops a broken one)
+
+-- An item's link from the game (Forever: C_Item; no global GetItemInfo there), or nil if not loaded.
+function Crafters.ItemLink(id)
+	local fns = { C_Item and C_Item.GetItemInfo or false, GetItemInfo or false }
+	for k = 1, 2 do
+		local fn = fns[k]
+		if type(fn) == "function" then
+			local ok, _, link = pcall(fn, id)
+			if ok and type(link) == "string" and link:find("|H", 1, true) then return link end
+		end
+	end
+	return nil
+end
+
+-- A recipe's own link (the profession's line, e.g. "[Engineering: Gold Power Core]"), or nil.
+function Crafters.RecipeLink(recipe)
+	if not recipe then return nil end
+	local fns = { C_TradeSkillUI and C_TradeSkillUI.GetRecipeLink or false, C_Spell and C_Spell.GetSpellLink or false, GetSpellLink or false }
+	for k = 1, 3 do
+		local fn = fns[k]
+		if type(fn) == "function" then
+			local ok, link = pcall(fn, recipe)
+			if ok and type(link) == "string" and link:find("|H", 1, true) then return link end
+		end
+	end
+	return nil
+end
+
+-- The whisper, longest form that fits: item + recipe + materials, then without the materials, then
+-- without the recipe's link.
+function Crafters.AskText(it)
+	local item = Crafters.ItemLink(it.id) or ItemName(it.id)
+	local recipe = Crafters.RecipeLink(it.recipe)
+	local mats = {}
+	for _, m in ipairs(Crafters.ReagentsOf(it.recipe) or {}) do
+		mats[#mats + 1] = ("%d %s"):format(tonumber(m.n) or 1, ItemName(tonumber(m.i)))
+	end
+	local base = L.CRAFTER_ASK_WHISPER:format(item)
+	local tries = {}
+	if recipe and #mats > 0 then tries[#tries + 1] = base .. " " .. recipe .. " " .. L.CRAFTER_ASK_MATS:format(table.concat(mats, ", ")) end
+	if recipe then tries[#tries + 1] = base .. " " .. recipe end
+	if #mats > 0 then tries[#tries + 1] = base .. " " .. L.CRAFTER_ASK_MATS:format(table.concat(mats, ", ")) end
+	tries[#tries + 1] = base
+	for _, text in ipairs(tries) do
+		if #text <= Crafters.WHISPER_MAX then return text end
+	end
+	return base:sub(1, Crafters.WHISPER_MAX) -- (an item's name alone that long: never in practice)
+end
+
+-- Shift-click on a crafter's recipe while the small chat shows (ChatDock.lua, the user, 2026-11-13):
+-- "@Crafter [item] " in its box, the rest for the player to write (the name in the line is a mention
+-- for them, Mentions.lua). True when it went there; else the game's own shift-click (a chat link).
+function Crafters.TagInChat(crafter, it)
+	local D = ns.ChatDock
+	if not crafter or not it or not it.id or not (D and D.IsShown and D.IsShown()) then return false end
+	local link = Crafters.ItemLink(it.id) or ("[" .. ItemName(it.id) .. "]")
+	return ns.ChatWindow.InsertText(("@%s %s "):format(ns.DisplayName(crafter), link)) == true
+end
+
+function Crafters.AskFor(crafter, it)
+	if not crafter or not it or not it.id then return end
+	if ns.UI and ns.UI.WhisperText then return ns.UI.WhisperText(ns.TellName(crafter), Crafters.AskText(it)) end
+end
+
+-- A crafter's recipes as an items row: a click on one asks them for it.
+function Crafters.AskRow(crafter, items)
+	return { indent = 2, items = items, itemHint = L.CRAFTER_ITEM_HINT:format(ns.DisplayName(crafter)),
+		onItem = function(it) Crafters.AskFor(crafter, it) end,
+		onShiftItem = function(it) return Crafters.TagInChat(crafter, it) end }
+end
+
+-- A crafter's name on the page, its colour saying the guild (the guild only on hover: the narrow
+-- window cut it): soft parchment for the home guild, blood red for its alt guild (ns.ALT_GUILD_NAME;
+-- no Forever class has either colour); any other guild grey, its name still beside it. Tooltips
+-- keep the guild.
+Crafters.MAIN_COLOUR = "|cffe8dcc0"
+Crafters.ALT_COLOUR = "|cffc0392b"
+function Crafters.NameIn(name, guild)
+	local who = ns.DisplayName(name)
+	if ns.IsKingGuild(guild) then return Crafters.MAIN_COLOUR .. who .. "|r" end
+	if ns.IsAltGuild(guild) then return Crafters.ALT_COLOUR .. who .. "|r" end
+	return Grey(who) .. "  " .. Grey("<" .. tostring(guild) .. ">")
+end
+
 -- The page's lines; `q`, the Realm's search: crafters whose name, guild or profession holds it.
-function Crafters.Lines(q)
-	local lines = { { text = Gold(L.CHATS_BACK), onClick = function() ns.Views.ShowPage(nil) end, gapAfter = true } }
-	lines[#lines + 1] = { header = true, text = L.CRAFTER_TITLE,
+-- `view`: "dock" for the small Crafters window (ChatDock.lua): what shows opened is its own, and no
+-- "Back" line (it is a window, not a page); else the Realm tab's page.
+function Crafters.Lines(q, view)
+	local open = openBy[view == "dock" and "dock" or "main"]
+	local lines = {}
+	if view ~= "dock" then lines[1] = { text = Gold(L.CHATS_BACK), onClick = function() ns.Views.ShowPage(nil) end, gapAfter = true } end
+	-- The title says the colours: the home guild's, and its alt guild's name after it when there is one.
+	local title = Crafters.MAIN_COLOUR .. L.CRAFTER_TITLE .. "|r"
+	local alt = ns.ALT_GUILD_NAME
+	if type(alt) == "string" and alt ~= "" then title = title .. " " .. Crafters.ALT_COLOUR .. L.CRAFTER_ALT_TAG:format(alt) .. "|r" end
+	lines[#lines + 1] = { header = true, text = title,
 		tooltip = function(tt) tt:AddLine(L.CRAFTER_TITLE, 1, 0.82, 0); tt:AddLine(L.CRAFTER_ABOUT, 1, 1, 1, true) end }
 	if not q then
 		lines[#lines + 1] = { text = Green(L.CRAFTER_ASK), onClick = function() Crafters.AskPrompt() end,
@@ -836,15 +1139,15 @@ function Crafters.Lines(q)
 			table.sort(off, function(a, b) return (a.name or "") < (b.name or "") end)
 			local offNames = {}
 			for _, p in ipairs(off) do offNames[#offNames + 1] = p.name end
-			lines[#lines + 1] = { text = (mineOpen and "[-] " or "[+] ") .. Grey(L.CRAFTER_YOU:format(table.concat(names, ", "))
+			lines[#lines + 1] = { text = (open.mine and "[-] " or "[+] ") .. Grey(L.CRAFTER_YOU:format(table.concat(names, ", "))
 				.. (#off > 0 and ("  ·  " .. L.CRAFTER_YOU_OFF:format(table.concat(offNames, ", "))) or "")),
 				actions = { { text = L.CRAFTER_GO_PRIVATE, tooltip = L.CRAFTER_UNLIST_TIP, onClick = function() Crafters.AskUnlist() end } },
 				onClick = function()
-					mineOpen = not mineOpen
-					if ns.UI and ns.UI.Refresh then ns.UI.Refresh() end
+					open.mine = not open.mine or nil
+					Crafters.Redraw()
 				end,
 				tooltip = function(tt) tt:AddLine(L.CRAFTER_YOU_TITLE, 1, 0.82, 0); tt:AddLine(L.CRAFTER_YOU_TIP, 1, 1, 1, true) end }
-			if mineOpen then
+			if open.mine then
 				for _, p in ipairs(listed) do
 					local recipes = type(p.recipes) == "table" and p.recipes or {}
 					lines[#lines + 1] = { indent = 1, text = Gold(p.name),
@@ -891,17 +1194,17 @@ function Crafters.Lines(q)
 			for _, x in ipairs(answers) do
 				local who = ns.DisplayName(x.name)
 				lines[#lines + 1] = { indent = 1, key = x.name,
-					text = who .. "  " .. Grey("<" .. x.e.guild .. ">"), right = Gold(L.CRAFTER_WHISPER) .. "  " .. Grey(("%s %d"):format(x.e.prof, x.e.rank)),
+					text = Crafters.NameIn(x.name, x.e.guild), right = Gold(L.CRAFTER_WHISPER) .. "  " .. Grey(("%s %d"):format(x.e.prof, x.e.rank)),
 					onClick = function() Whisper(x.name) end,
 					tooltip = function(tt)
-						tt:AddLine(who, 1, 0.82, 0)
+						tt:AddLine(who .. "  <" .. x.e.guild .. ">", 1, 0.82, 0)
 						for _, r in ipairs(x.e.recipes) do
 							if r.i then tt:AddLine(ItemName(r.i), 1, 1, 1) end
 						end
 						tt:AddLine(L.CRAFTER_WHISPER_TIP:format(who), 0.6, 0.6, 0.6, true)
 					end }
 				local items = RecipeItems(x.e.recipes)
-				if #items > 0 then lines[#lines + 1] = { indent = 2, items = items } end
+				if #items > 0 then lines[#lines + 1] = Crafters.AskRow(x.name, items) end
 			end
 			lines[#lines].gapAfter = true
 		end
@@ -937,18 +1240,23 @@ function Crafters.Lines(q)
 			local id = c.name .. "~" .. p.key
 			local opened = open[id] == true
 			lines[#lines + 1] = { indent = 1, key = c.name,
-				text = (opened and "[-] " or "[+] ") .. who .. "  " .. Grey("<" .. c.guild .. ">"),
+				text = (opened and "[-] " or "[+] ") .. Crafters.NameIn(c.name, c.guild),
 				right = Grey(L.CRAFTER_SKILL:format(p.rank, p.max, p.n)),
 				onClick = function()
 					open[id] = not opened or nil
-					if ns.UI and ns.UI.Refresh then ns.UI.Refresh() end
+					Crafters.Redraw()
 				end,
 				tooltip = function(tt)
 					tt:AddLine(who .. "  <" .. c.guild .. ">", 1, 0.82, 0)
 					tt:AddLine(L.CRAFTER_ROW_TIP:format(p.name, p.rank, p.n, ns.Ago(c.t)), 1, 1, 1, true)
 				end }
 			if opened then
-				lines[#lines + 1] = { indent = 2, text = Gold(L.CRAFTER_WHISPER_TO:format(who)), onClick = function() Whisper(c.name) end }
+				-- A whisper already written asking them to open this profession (the user, 2026-11-13).
+				lines[#lines + 1] = { indent = 2, text = Gold(L.CRAFTER_WHISPER_TO:format(who)),
+					onClick = function()
+						if ns.UI and ns.UI.WhisperText then ns.UI.WhisperText(ns.TellName(c.name), L.CRAFTER_LINK_ASK:format(p.name)) else Whisper(c.name) end
+					end,
+					tooltip = function(tt) tt:AddLine(L.CRAFTER_WHISPER_TO:format(who), 1, 0.82, 0); tt:AddLine(L.CRAFTER_LINK_ASK_TIP, 1, 1, 1, true) end }
 				local recipes, l = Crafters.ListOf(c.name, p.key)
 				if not recipes or (l.busy and #recipes == 0) then
 					-- (Their addon busy with other players' lists: they said so; a click asks again.)
@@ -958,7 +1266,7 @@ function Crafters.Lines(q)
 						tooltip = function(tt) tt:AddLine(L.CRAFTER_SHOW_RECIPES, 1, 0.82, 0); tt:AddLine(L.CRAFTER_SHOW_RECIPES_TIP, 1, 1, 1, true) end }
 				else
 					local items, others = RecipeItems(recipes)
-					if #items > 0 then lines[#lines + 1] = { indent = 2, items = items } end
+					if #items > 0 then lines[#lines + 1] = Crafters.AskRow(c.name, items) end
 					local got = 0
 					for part = 1, l.n or 0 do if l.parts[part] then got = got + 1 end end
 					if #recipes == 0 or got < (l.n or 1) then
@@ -996,9 +1304,9 @@ function Crafters.AskUnlist()
 	ns.ShowDialog("GMF_CRAFTER_REMOVE", L.CRAFTER_PRIVATE_WORD)
 end
 function Crafters.GoPrivate()
-	mineOpen = false
+	openBy.main.mine, openBy.dock.mine = nil, nil
 	Crafters.Choose(nil, false)
-	if ns.UI and ns.UI.Refresh then ns.UI.Refresh() end
+	Crafters.Redraw()
 end
 -- (The game's popup greys its button until the word is typed; the add-on's own window, Dialog.lua,
 -- can't: there a wrong word keeps the dialog up, with a line that says why.)
@@ -1184,9 +1492,10 @@ ns.On("LOGIN", function() Crafters.OnLogin() end)
 function Crafters.Reset()
 	wipe(board); boardCount = 0
 	myAsk, askCounter, pendingRead = nil, 0, nil
-	wipe(askTimes); wipe(answered); wipe(answerTimes); wipe(listSent); wipe(listTimes); wipe(lists); wipe(asked); wipe(open); wipe(questioned)
+	wipe(askTimes); wipe(answered); wipe(answerTimes); wipe(listSent); wipe(listTimes); wipe(lists); wipe(asked); wipe(busyRetried); wipe(openBy.main); wipe(openBy.dock); wipe(questioned)
 	lastListing, lastListingText, lastListingKeys, changedWaiting, loginWait = -math.huge, nil, nil, false, false
 	wipe(listJobs); wipe(busyTimes); listPumping = false
+	wipe(reagentTried); wipe(namesWaiting); namesOwner = nil
 end
 
 -- 1.3.0: the privacy page's line (/gmf privacy): listed by default, private with one switch.
